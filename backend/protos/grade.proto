@@ -106,8 +106,16 @@ message UploadGradesRequest {
 
 // Server streaming: Gateway sends grade entries one by one
 message UploadGradeEntryRequest {
-  GradeEntry entry = 1;
-  bool is_last = 2; // indicates last entry in stream
+  oneof payload {
+    UploadMetadata metadata = 1;  // First message only
+    GradeEntry entry = 2;         // Subsequent messages
+  }
+  bool is_last = 3;
+}
+
+message UploadMetadata {
+  string course_id = 1;
+  string faculty_id = 2;
 }
 
 message UploadGradesResponse {

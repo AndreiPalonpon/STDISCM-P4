@@ -842,9 +842,13 @@ func (x *UploadGradesRequest) GetFacultyId() string {
 
 // Server streaming: Gateway sends grade entries one by one
 type UploadGradeEntryRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Entry         *GradeEntry            `protobuf:"bytes,1,opt,name=entry,proto3" json:"entry,omitempty"`
-	IsLast        bool                   `protobuf:"varint,2,opt,name=is_last,json=isLast,proto3" json:"is_last,omitempty"` // indicates last entry in stream
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*UploadGradeEntryRequest_Metadata
+	//	*UploadGradeEntryRequest_Entry
+	Payload       isUploadGradeEntryRequest_Payload `protobuf_oneof:"payload"`
+	IsLast        bool                              `protobuf:"varint,3,opt,name=is_last,json=isLast,proto3" json:"is_last,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -879,9 +883,27 @@ func (*UploadGradeEntryRequest) Descriptor() ([]byte, []int) {
 	return file_backend_protos_grade_proto_rawDescGZIP(), []int{12}
 }
 
+func (x *UploadGradeEntryRequest) GetPayload() isUploadGradeEntryRequest_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *UploadGradeEntryRequest) GetMetadata() *UploadMetadata {
+	if x != nil {
+		if x, ok := x.Payload.(*UploadGradeEntryRequest_Metadata); ok {
+			return x.Metadata
+		}
+	}
+	return nil
+}
+
 func (x *UploadGradeEntryRequest) GetEntry() *GradeEntry {
 	if x != nil {
-		return x.Entry
+		if x, ok := x.Payload.(*UploadGradeEntryRequest_Entry); ok {
+			return x.Entry
+		}
 	}
 	return nil
 }
@@ -891,6 +913,74 @@ func (x *UploadGradeEntryRequest) GetIsLast() bool {
 		return x.IsLast
 	}
 	return false
+}
+
+type isUploadGradeEntryRequest_Payload interface {
+	isUploadGradeEntryRequest_Payload()
+}
+
+type UploadGradeEntryRequest_Metadata struct {
+	Metadata *UploadMetadata `protobuf:"bytes,1,opt,name=metadata,proto3,oneof"` // First message only
+}
+
+type UploadGradeEntryRequest_Entry struct {
+	Entry *GradeEntry `protobuf:"bytes,2,opt,name=entry,proto3,oneof"` // Subsequent messages
+}
+
+func (*UploadGradeEntryRequest_Metadata) isUploadGradeEntryRequest_Payload() {}
+
+func (*UploadGradeEntryRequest_Entry) isUploadGradeEntryRequest_Payload() {}
+
+type UploadMetadata struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CourseId      string                 `protobuf:"bytes,1,opt,name=course_id,json=courseId,proto3" json:"course_id,omitempty"`
+	FacultyId     string                 `protobuf:"bytes,2,opt,name=faculty_id,json=facultyId,proto3" json:"faculty_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UploadMetadata) Reset() {
+	*x = UploadMetadata{}
+	mi := &file_backend_protos_grade_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UploadMetadata) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UploadMetadata) ProtoMessage() {}
+
+func (x *UploadMetadata) ProtoReflect() protoreflect.Message {
+	mi := &file_backend_protos_grade_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UploadMetadata.ProtoReflect.Descriptor instead.
+func (*UploadMetadata) Descriptor() ([]byte, []int) {
+	return file_backend_protos_grade_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *UploadMetadata) GetCourseId() string {
+	if x != nil {
+		return x.CourseId
+	}
+	return ""
+}
+
+func (x *UploadMetadata) GetFacultyId() string {
+	if x != nil {
+		return x.FacultyId
+	}
+	return ""
 }
 
 type UploadGradesResponse struct {
@@ -907,7 +997,7 @@ type UploadGradesResponse struct {
 
 func (x *UploadGradesResponse) Reset() {
 	*x = UploadGradesResponse{}
-	mi := &file_backend_protos_grade_proto_msgTypes[13]
+	mi := &file_backend_protos_grade_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -919,7 +1009,7 @@ func (x *UploadGradesResponse) String() string {
 func (*UploadGradesResponse) ProtoMessage() {}
 
 func (x *UploadGradesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_backend_protos_grade_proto_msgTypes[13]
+	mi := &file_backend_protos_grade_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -932,7 +1022,7 @@ func (x *UploadGradesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadGradesResponse.ProtoReflect.Descriptor instead.
 func (*UploadGradesResponse) Descriptor() ([]byte, []int) {
-	return file_backend_protos_grade_proto_rawDescGZIP(), []int{13}
+	return file_backend_protos_grade_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *UploadGradesResponse) GetSuccess() bool {
@@ -987,7 +1077,7 @@ type PublishGradesRequest struct {
 
 func (x *PublishGradesRequest) Reset() {
 	*x = PublishGradesRequest{}
-	mi := &file_backend_protos_grade_proto_msgTypes[14]
+	mi := &file_backend_protos_grade_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -999,7 +1089,7 @@ func (x *PublishGradesRequest) String() string {
 func (*PublishGradesRequest) ProtoMessage() {}
 
 func (x *PublishGradesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_backend_protos_grade_proto_msgTypes[14]
+	mi := &file_backend_protos_grade_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1012,7 +1102,7 @@ func (x *PublishGradesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishGradesRequest.ProtoReflect.Descriptor instead.
 func (*PublishGradesRequest) Descriptor() ([]byte, []int) {
-	return file_backend_protos_grade_proto_rawDescGZIP(), []int{14}
+	return file_backend_protos_grade_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *PublishGradesRequest) GetCourseId() string {
@@ -1040,7 +1130,7 @@ type PublishGradesResponse struct {
 
 func (x *PublishGradesResponse) Reset() {
 	*x = PublishGradesResponse{}
-	mi := &file_backend_protos_grade_proto_msgTypes[15]
+	mi := &file_backend_protos_grade_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1052,7 +1142,7 @@ func (x *PublishGradesResponse) String() string {
 func (*PublishGradesResponse) ProtoMessage() {}
 
 func (x *PublishGradesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_backend_protos_grade_proto_msgTypes[15]
+	mi := &file_backend_protos_grade_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1065,7 +1155,7 @@ func (x *PublishGradesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishGradesResponse.ProtoReflect.Descriptor instead.
 func (*PublishGradesResponse) Descriptor() ([]byte, []int) {
-	return file_backend_protos_grade_proto_rawDescGZIP(), []int{15}
+	return file_backend_protos_grade_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *PublishGradesResponse) GetSuccess() bool {
@@ -1099,7 +1189,7 @@ type GetCourseGradesRequest struct {
 
 func (x *GetCourseGradesRequest) Reset() {
 	*x = GetCourseGradesRequest{}
-	mi := &file_backend_protos_grade_proto_msgTypes[16]
+	mi := &file_backend_protos_grade_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1111,7 +1201,7 @@ func (x *GetCourseGradesRequest) String() string {
 func (*GetCourseGradesRequest) ProtoMessage() {}
 
 func (x *GetCourseGradesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_backend_protos_grade_proto_msgTypes[16]
+	mi := &file_backend_protos_grade_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1124,7 +1214,7 @@ func (x *GetCourseGradesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCourseGradesRequest.ProtoReflect.Descriptor instead.
 func (*GetCourseGradesRequest) Descriptor() ([]byte, []int) {
-	return file_backend_protos_grade_proto_rawDescGZIP(), []int{16}
+	return file_backend_protos_grade_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *GetCourseGradesRequest) GetCourseId() string {
@@ -1152,7 +1242,7 @@ type GetCourseGradesResponse struct {
 
 func (x *GetCourseGradesResponse) Reset() {
 	*x = GetCourseGradesResponse{}
-	mi := &file_backend_protos_grade_proto_msgTypes[17]
+	mi := &file_backend_protos_grade_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1164,7 +1254,7 @@ func (x *GetCourseGradesResponse) String() string {
 func (*GetCourseGradesResponse) ProtoMessage() {}
 
 func (x *GetCourseGradesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_backend_protos_grade_proto_msgTypes[17]
+	mi := &file_backend_protos_grade_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1177,7 +1267,7 @@ func (x *GetCourseGradesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCourseGradesResponse.ProtoReflect.Descriptor instead.
 func (*GetCourseGradesResponse) Descriptor() ([]byte, []int) {
-	return file_backend_protos_grade_proto_rawDescGZIP(), []int{17}
+	return file_backend_protos_grade_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *GetCourseGradesResponse) GetGrades() []*Grade {
@@ -1278,10 +1368,16 @@ const file_backend_protos_grade_proto_rawDesc = "" +
 	"\x13UploadGradesRequest\x12\x1b\n" +
 	"\tcourse_id\x18\x01 \x01(\tR\bcourseId\x12\x1d\n" +
 	"\n" +
-	"faculty_id\x18\x02 \x01(\tR\tfacultyId\"[\n" +
-	"\x17UploadGradeEntryRequest\x12'\n" +
-	"\x05entry\x18\x01 \x01(\v2\x11.grade.GradeEntryR\x05entry\x12\x17\n" +
-	"\ais_last\x18\x02 \x01(\bR\x06isLast\"\xc3\x01\n" +
+	"faculty_id\x18\x02 \x01(\tR\tfacultyId\"\x9d\x01\n" +
+	"\x17UploadGradeEntryRequest\x123\n" +
+	"\bmetadata\x18\x01 \x01(\v2\x15.grade.UploadMetadataH\x00R\bmetadata\x12)\n" +
+	"\x05entry\x18\x02 \x01(\v2\x11.grade.GradeEntryH\x00R\x05entry\x12\x17\n" +
+	"\ais_last\x18\x03 \x01(\bR\x06isLastB\t\n" +
+	"\apayload\"L\n" +
+	"\x0eUploadMetadata\x12\x1b\n" +
+	"\tcourse_id\x18\x01 \x01(\tR\bcourseId\x12\x1d\n" +
+	"\n" +
+	"faculty_id\x18\x02 \x01(\tR\tfacultyId\"\xc3\x01\n" +
 	"\x14UploadGradesResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12'\n" +
 	"\x0ftotal_processed\x18\x02 \x01(\x05R\x0etotalProcessed\x12\x1e\n" +
@@ -1327,7 +1423,7 @@ func file_backend_protos_grade_proto_rawDescGZIP() []byte {
 	return file_backend_protos_grade_proto_rawDescData
 }
 
-var file_backend_protos_grade_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_backend_protos_grade_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_backend_protos_grade_proto_goTypes = []any{
 	(*Grade)(nil),                    // 0: grade.Grade
 	(*GPACalculation)(nil),           // 1: grade.GPACalculation
@@ -1342,40 +1438,42 @@ var file_backend_protos_grade_proto_goTypes = []any{
 	(*GetClassRosterResponse)(nil),   // 10: grade.GetClassRosterResponse
 	(*UploadGradesRequest)(nil),      // 11: grade.UploadGradesRequest
 	(*UploadGradeEntryRequest)(nil),  // 12: grade.UploadGradeEntryRequest
-	(*UploadGradesResponse)(nil),     // 13: grade.UploadGradesResponse
-	(*PublishGradesRequest)(nil),     // 14: grade.PublishGradesRequest
-	(*PublishGradesResponse)(nil),    // 15: grade.PublishGradesResponse
-	(*GetCourseGradesRequest)(nil),   // 16: grade.GetCourseGradesRequest
-	(*GetCourseGradesResponse)(nil),  // 17: grade.GetCourseGradesResponse
-	(*timestamppb.Timestamp)(nil),    // 18: google.protobuf.Timestamp
+	(*UploadMetadata)(nil),           // 13: grade.UploadMetadata
+	(*UploadGradesResponse)(nil),     // 14: grade.UploadGradesResponse
+	(*PublishGradesRequest)(nil),     // 15: grade.PublishGradesRequest
+	(*PublishGradesResponse)(nil),    // 16: grade.PublishGradesResponse
+	(*GetCourseGradesRequest)(nil),   // 17: grade.GetCourseGradesRequest
+	(*GetCourseGradesResponse)(nil),  // 18: grade.GetCourseGradesResponse
+	(*timestamppb.Timestamp)(nil),    // 19: google.protobuf.Timestamp
 }
 var file_backend_protos_grade_proto_depIdxs = []int32{
-	18, // 0: grade.Grade.uploaded_at:type_name -> google.protobuf.Timestamp
-	18, // 1: grade.Grade.published_at:type_name -> google.protobuf.Timestamp
+	19, // 0: grade.Grade.uploaded_at:type_name -> google.protobuf.Timestamp
+	19, // 1: grade.Grade.published_at:type_name -> google.protobuf.Timestamp
 	2,  // 2: grade.GPACalculation.semester_breakdown:type_name -> grade.SemesterGPA
 	0,  // 3: grade.GetStudentGradesResponse.grades:type_name -> grade.Grade
 	1,  // 4: grade.GetStudentGradesResponse.gpa_info:type_name -> grade.GPACalculation
 	1,  // 5: grade.CalculateGPAResponse.gpa_info:type_name -> grade.GPACalculation
 	3,  // 6: grade.GetClassRosterResponse.students:type_name -> grade.StudentRosterEntry
-	4,  // 7: grade.UploadGradeEntryRequest.entry:type_name -> grade.GradeEntry
-	0,  // 8: grade.GetCourseGradesResponse.grades:type_name -> grade.Grade
-	5,  // 9: grade.GradeService.GetStudentGrades:input_type -> grade.GetStudentGradesRequest
-	7,  // 10: grade.GradeService.CalculateGPA:input_type -> grade.CalculateGPARequest
-	9,  // 11: grade.GradeService.GetClassRoster:input_type -> grade.GetClassRosterRequest
-	12, // 12: grade.GradeService.UploadGrades:input_type -> grade.UploadGradeEntryRequest
-	14, // 13: grade.GradeService.PublishGrades:input_type -> grade.PublishGradesRequest
-	16, // 14: grade.GradeService.GetCourseGrades:input_type -> grade.GetCourseGradesRequest
-	6,  // 15: grade.GradeService.GetStudentGrades:output_type -> grade.GetStudentGradesResponse
-	8,  // 16: grade.GradeService.CalculateGPA:output_type -> grade.CalculateGPAResponse
-	10, // 17: grade.GradeService.GetClassRoster:output_type -> grade.GetClassRosterResponse
-	13, // 18: grade.GradeService.UploadGrades:output_type -> grade.UploadGradesResponse
-	15, // 19: grade.GradeService.PublishGrades:output_type -> grade.PublishGradesResponse
-	17, // 20: grade.GradeService.GetCourseGrades:output_type -> grade.GetCourseGradesResponse
-	15, // [15:21] is the sub-list for method output_type
-	9,  // [9:15] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	13, // 7: grade.UploadGradeEntryRequest.metadata:type_name -> grade.UploadMetadata
+	4,  // 8: grade.UploadGradeEntryRequest.entry:type_name -> grade.GradeEntry
+	0,  // 9: grade.GetCourseGradesResponse.grades:type_name -> grade.Grade
+	5,  // 10: grade.GradeService.GetStudentGrades:input_type -> grade.GetStudentGradesRequest
+	7,  // 11: grade.GradeService.CalculateGPA:input_type -> grade.CalculateGPARequest
+	9,  // 12: grade.GradeService.GetClassRoster:input_type -> grade.GetClassRosterRequest
+	12, // 13: grade.GradeService.UploadGrades:input_type -> grade.UploadGradeEntryRequest
+	15, // 14: grade.GradeService.PublishGrades:input_type -> grade.PublishGradesRequest
+	17, // 15: grade.GradeService.GetCourseGrades:input_type -> grade.GetCourseGradesRequest
+	6,  // 16: grade.GradeService.GetStudentGrades:output_type -> grade.GetStudentGradesResponse
+	8,  // 17: grade.GradeService.CalculateGPA:output_type -> grade.CalculateGPAResponse
+	10, // 18: grade.GradeService.GetClassRoster:output_type -> grade.GetClassRosterResponse
+	14, // 19: grade.GradeService.UploadGrades:output_type -> grade.UploadGradesResponse
+	16, // 20: grade.GradeService.PublishGrades:output_type -> grade.PublishGradesResponse
+	18, // 21: grade.GradeService.GetCourseGrades:output_type -> grade.GetCourseGradesResponse
+	16, // [16:22] is the sub-list for method output_type
+	10, // [10:16] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_backend_protos_grade_proto_init() }
@@ -1383,13 +1481,17 @@ func file_backend_protos_grade_proto_init() {
 	if File_backend_protos_grade_proto != nil {
 		return
 	}
+	file_backend_protos_grade_proto_msgTypes[12].OneofWrappers = []any{
+		(*UploadGradeEntryRequest_Metadata)(nil),
+		(*UploadGradeEntryRequest_Entry)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_backend_protos_grade_proto_rawDesc), len(file_backend_protos_grade_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
