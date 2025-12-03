@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package course;
+option go_package = "backend/pb/course";
+
+import "google/protobuf/timestamp.proto";
+
+// Service definition
+service CourseService {
+  rpc ListCourses(ListCoursesRequest) returns (ListCoursesResponse);
+  rpc GetCourse(GetCourseRequest) returns (GetCourseResponse);
+  rpc CheckPrerequisites(CheckPrerequisitesRequest) returns (CheckPrerequisitesResponse);
+  rpc GetCourseAvailability(GetCourseAvailabilityRequest) returns (GetCourseAvailabilityResponse);
+}
+
+// Common messages
+message Course {
+  string id = 1;
+  string code = 2;
+  string title = 3;
+  string description = 4;
+  int32 units = 5;
+  string schedule = 6; // e.g., "MWF 9:00-10:00"
+  string room = 7;
+  int32 capacity = 8;
+  int32 enrolled = 9;
+  string faculty_id = 10;
+  string faculty_name = 11; // denormalized for display
+  bool is_open = 12;
+  string semester = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+  repeated string prerequisites = 16; // list of course IDs
+}
+
+message CourseFilter {
+  string department = 1; // filter by department code (e.g., "CS")
+  string search_query = 2; // search in code or title
+  bool open_only = 3; // filter only open courses
+  string semester = 4; // filter by semester
+}
+
+// Request/Response messages
+message ListCoursesRequest {
+  CourseFilter filters = 1;
+}
+
+message ListCoursesResponse {
+  repeated Course courses = 1;
+  int32 total_count = 2;
+}
+
+message GetCourseRequest {
+  string course_id = 1;
+}
+
+message GetCourseResponse {
+  bool success = 1;
+  Course course = 2;
+  string message = 3;
+}
+
+message CheckPrerequisitesRequest {
+  string student_id = 1;
+  string course_id = 2;
+}
+
+message PrerequisiteStatus {
+  string course_id = 1;
+  string course_code = 2;
+  bool met = 3;
+  string grade = 4; // grade received if taken
+}
+
+message CheckPrerequisitesResponse {
+  bool all_met = 1;
+  repeated PrerequisiteStatus prerequisites = 2;
+  string message = 3;
+}
+
+message GetCourseAvailabilityRequest {
+  string course_id = 1;
+}
+
+message GetCourseAvailabilityResponse {
+  bool available = 1;
+  int32 capacity = 2;
+  int32 enrolled = 3;
+  int32 seats_remaining = 4;
+  bool is_open = 5;
+  string message = 6;
+}
