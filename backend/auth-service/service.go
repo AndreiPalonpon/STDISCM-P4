@@ -120,14 +120,14 @@ func (s *AuthService) Logout(ctx context.Context, req *pb.LogoutRequest) (*pb.Lo
 	defer cancel()
 
 	// Remove session from DB
-	result, err := s.sessionsCol.DeleteOne(queryCtx, bson.M{"token": req.Token})
+	// Changed to DeleteMany to ensure idempotency and handle potential duplicate tokens from rapid testing
+	result, err := s.sessionsCol.DeleteMany(queryCtx, bson.M{"token": req.Token})
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to logout")
 	}
 
 	if result.DeletedCount == 0 {
-		// Even if not found, we treat logout as successful from client perspective
-		// (idempotent operation)
+		// Even if not found, we treat logout as successful from client perspective (idempotent operation)
 		return &pb.LogoutResponse{Success: true, Message: "session already expired or invalid"}, nil
 	}
 
@@ -228,6 +228,8 @@ func (s *AuthService) generateToken(userID, role string) (string, time.Time, err
 		UserID: userID,
 		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
+			// Add unique ID (jti) to claims to ensure tokens are unique even if generated at the exact same timestamp
+			ID:        shared.GenerateID("jti"),
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Issuer:    "college-enrollment-system",

@@ -53,8 +53,6 @@ func (s *GradeService) GetStudentGrades(ctx context.Context, req *pb.GetStudentG
 	err := s.usersCol.FindOne(queryCtx, bson.M{"_id": req.StudentId}).Decode(&student)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			// If student doesn't exist, strictly speaking we should probably error,
-			// but returning empty is also safe. Original logic returned empty.
 			return &pb.GetStudentGradesResponse{
 				Grades:  []*pb.Grade{},
 				GpaInfo: &pb.GPACalculation{},
@@ -68,8 +66,12 @@ func (s *GradeService) GetStudentGrades(ctx context.Context, req *pb.GetStudentG
 		return nil, status.Error(codes.PermissionDenied, "user is not a student")
 	}
 
-	// Get grades
-	filter := bson.M{"student_id": req.StudentId}
+	// [FIX] Added "published": true to filter
+	// Students should only see published grades
+	filter := bson.M{
+		"student_id": req.StudentId,
+		"published":  true,
+	}
 	if req.Semester != "" {
 		filter["semester"] = req.Semester
 	}
@@ -286,7 +288,13 @@ func (s *GradeService) PublishGrades(ctx context.Context, req *pb.PublishGradesR
 		return &pb.PublishGradesResponse{Success: false, Message: fmt.Sprintf("%v", err)}, nil
 	}
 
-	filter := bson.M{"course_id": req.CourseId, "published": false}
+	// [FIX] Update documents where published is false OR missing
+	// Using $ne: true covers both 'false' and missing fields
+	filter := bson.M{
+		"course_id": req.CourseId,
+		"published": bson.M{"$ne": true},
+	}
+
 	update := bson.M{
 		"$set": bson.M{
 			"published":        true,
@@ -370,7 +378,6 @@ func (s *GradeService) GetCourseGrades(ctx context.Context, req *pb.GetCourseGra
 func (s *GradeService) documentToGrade(doc bson.M) (*pb.Grade, error) {
 	grade := &pb.Grade{}
 
-	// Safely extract fields using shared helpers to prevent panics
 	if id, _ := shared.GetString(doc["enrollment_id"]); id != "" {
 		grade.EnrollmentId = id
 	} else {
@@ -422,14 +429,10 @@ func (s *GradeService) documentToGrade(doc bson.M) (*pb.Grade, error) {
 }
 
 func (s *GradeService) calculateStudentGPA(ctx context.Context, studentID, semester string) (*pb.GPACalculation, error) {
-	// Standardize GPA Calculation
-	// We replaced the aggregation pipeline with this logic to handle denormalized fields
-	// and shared grade points logic safely.
 	filter := bson.M{
 		"student_id": studentID,
 		"published":  true,
-		// Exclude I and W from GPA
-		"grade": bson.M{"$nin": []string{shared.GradeI, shared.GradeW}},
+		"grade":      bson.M{"$nin": []string{shared.GradeI, shared.GradeW}},
 	}
 	if semester != "" {
 		filter["semester"] = semester
@@ -448,8 +451,6 @@ func (s *GradeService) calculateStudentGPA(ctx context.Context, studentID, semes
 	})
 
 	for cursor.Next(ctx) {
-		// FIX: Use local struct to capture denormalized Units and Semester fields
-		// which are present in MongoDB grades but not in shared.Grade model.
 		var g struct {
 			Grade    string `bson:"grade"`
 			Units    int32  `bson:"units"`
@@ -457,19 +458,15 @@ func (s *GradeService) calculateStudentGPA(ctx context.Context, studentID, semes
 		}
 
 		if err := cursor.Decode(&g); err != nil {
-			log.Printf("Error decoding grade for GPA calc: %v", err)
 			continue
 		}
 
-		// Use shared helper for points
 		points := shared.GetGradePoints(g.Grade)
 		units := float64(g.Units)
 
-		// Aggregate Overall
 		overallPoints += points * units
 		overallUnits += units
 
-		// Aggregate Semester
 		if _, exists := semesterMap[g.Semester]; !exists {
 			semesterMap[g.Semester] = &struct {
 				points, units float64
@@ -482,7 +479,6 @@ func (s *GradeService) calculateStudentGPA(ctx context.Context, studentID, semes
 		sm.count++
 	}
 
-	// Build Result
 	calc := &pb.GPACalculation{
 		TotalUnitsAttempted: int32(overallUnits),
 		TotalUnitsEarned:    int32(overallUnits),
@@ -550,7 +546,6 @@ func (s *GradeService) uploadSingleGrade(ctx context.Context, courseID, facultyI
 		return fmt.Errorf("invalid grade")
 	}
 
-	// Find Enrollment (check if status is enrolled or completed)
 	var enrollment shared.Enrollment
 	err := s.enrollmentsCol.FindOne(ctx, bson.M{
 		"student_id": entry.StudentId, "course_id": courseID,
@@ -560,10 +555,6 @@ func (s *GradeService) uploadSingleGrade(ctx context.Context, courseID, facultyI
 		return fmt.Errorf("student not enrolled")
 	}
 
-	// Upsert Grade
-	// Note: We are explicitly saving denormalized fields (units, semester) here
-	// so the GPA calculator can access them later.
-	// We need to fetch course details first for denormalization.
 	var course shared.Course
 	if err := s.coursesCol.FindOne(ctx, bson.M{"_id": courseID}).Decode(&course); err != nil {
 		return fmt.Errorf("course details not found")
@@ -574,18 +565,26 @@ func (s *GradeService) uploadSingleGrade(ctx context.Context, courseID, facultyI
 		return fmt.Errorf("student details not found")
 	}
 
+	// [FIX] Explicitly set published: false to ensure consistency
+	// This ensures PublishGrades can find the documents later using {published: false}
+	// or {published: {$ne: true}}
 	update := bson.M{
 		"$set": bson.M{
-			"grade": grade, "last_modified_by": facultyID, "last_modified_at": time.Now(),
-			"uploaded_by": facultyID, "uploaded_at": time.Now(),
+			"grade":            grade,
+			"last_modified_by": facultyID,
+			"last_modified_at": time.Now(),
+			"uploaded_by":      facultyID,
+			"uploaded_at":      time.Now(),
+			"published":        false, // Important for PublishGrades logic
+
 			// Denormalized fields
 			"student_id":    entry.StudentId,
 			"student_name":  student.Name,
 			"course_id":     courseID,
 			"course_code":   course.Code,
 			"course_title":  course.Title,
-			"units":         course.Units,    // CRITICAL for GPA
-			"semester":      course.Semester, // CRITICAL for GPA
+			"units":         course.Units,
+			"semester":      course.Semester,
 			"enrollment_id": enrollment.ID,
 		},
 	}
