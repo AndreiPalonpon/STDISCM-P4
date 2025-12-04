@@ -1,81 +1,82 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/credentials/insecure"
 
-	// Update this import path to match your project structure
-	pb "stdiscm_p4/backend/pb/grade"
-	"stdiscm_p4/backend/shared"
+	// Proto imports
+	"stdiscm_p4/backend/pb/course"
+	"stdiscm_p4/backend/pb/enrollment"
+)
+
+const (
+	port              = ":50053"
+	mongoURI          = "mongodb://localhost:27017"
+	courseServiceAddr = "localhost:50052" // Address of Course Service
 )
 
 func main() {
-	// 1. Load Configuration using Shared Package
-	cfg, err := shared.LoadServiceConfig(".env")
-	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
-	}
+	log.Println("Starting Enrollment Service...")
 
-	// 2. Connect to MongoDB using Shared Package
-	client, db, err := shared.ConnectMongoDB(&cfg.MongoDB)
+	// 1. Connect to MongoDB
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
 	if err != nil {
 		log.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
+	defer client.Disconnect(context.Background())
 
-	// 3. Create gRPC Server with config
-	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(cfg.GRPC.MaxRecvMsgSize),
-		grpc.MaxSendMsgSize(cfg.GRPC.MaxSendMsgSize),
-	)
+	// Ping DB
+	if err := client.Ping(ctx, nil); err != nil {
+		log.Fatalf("MongoDB not reachable: %v", err)
+	}
+	log.Println("Connected to MongoDB")
 
-	// 4. Initialize and Register Grade Service
-	gradeService := NewGradeService(db)
-	pb.RegisterGradeServiceServer(grpcServer, gradeService)
-
-	// 5. Register Health Check
-	healthServer := health.NewServer()
-	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
-	healthServer.SetServingStatus("grade.GradeService", grpc_health_v1.HealthCheckResponse_SERVING)
-
-	// 6. Register Reflection
-	reflection.Register(grpcServer)
-
-	// 7. Start Listening
-	listener, err := net.Listen("tcp", ":"+cfg.ServicePort)
+	// 2. Connect to Course Service (Client)
+	// We need this to check prerequisites and course availability before enrolling
+	conn, err := grpc.Dial(courseServiceAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("Failed to listen on port %s: %v", cfg.ServicePort, err)
+		log.Fatalf("Failed to connect to Course Service: %v", err)
+	}
+	defer conn.Close()
+	courseClient := course.NewCourseServiceClient(conn)
+
+	// 3. Setup gRPC Server
+	lis, err := net.Listen("tcp", port)
+	if err != nil {
+		log.Fatalf("Failed to listen: %v", err)
 	}
 
-	// 8. Graceful Shutdown Handling
+	grpcServer := grpc.NewServer()
+
+	// Initialize the service logic
+	enrollmentSvc := NewEnrollmentService(client, courseClient)
+	enrollment.RegisterEnrollmentServiceServer(grpcServer, enrollmentSvc)
+
+	// 4. Graceful Shutdown
 	go func() {
-		log.Printf("Grade Service is listening on port %s", cfg.ServicePort)
-		if err := grpcServer.Serve(listener); err != nil {
+		log.Printf("Enrollment Service listening on %s", port)
+		if err := grpcServer.Serve(lis); err != nil {
 			log.Fatalf("Failed to serve: %v", err)
 		}
 	}()
 
-	// Wait for interrupt signal
+	// Wait for kill signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-
-	log.Println("Shutting down Grade Service...")
-
-	healthServer.SetServingStatus("grade.GradeService", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+	log.Println("Shutting down Enrollment Service...")
 	grpcServer.GracefulStop()
-
-	// Use shared disconnect helper
-	if err := shared.DisconnectMongoDB(client); err != nil {
-		log.Printf("Error disconnecting from MongoDB: %v", err)
-	}
-
-	log.Println("Grade Service stopped")
 }

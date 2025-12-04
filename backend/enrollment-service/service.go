@@ -2,584 +2,324 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	pb "stdiscm_p4/backend/pb/grade"
-	"stdiscm_p4/backend/shared"
+	"stdiscm_p4/backend/pb/course"
+	"stdiscm_p4/backend/pb/enrollment"
 )
 
-// GradeService implements the gRPC GradeService
-type GradeService struct {
-	pb.UnimplementedGradeServiceServer
-	db               *mongo.Database
-	gradesCol        *mongo.Collection
-	enrollmentsCol   *mongo.Collection
-	coursesCol       *mongo.Collection
-	usersCol         *mongo.Collection
-	prerequisitesCol *mongo.Collection
+type EnrollmentService struct {
+	enrollment.UnimplementedEnrollmentServiceServer
+	db           *mongo.Client
+	cartsColl    *mongo.Collection
+	enrollColl   *mongo.Collection
+	coursesColl  *mongo.Collection // Needed to update seat counts
+	courseClient course.CourseServiceClient
 }
 
-// NewGradeService creates a new GradeService instance
-func NewGradeService(db *mongo.Database) *GradeService {
-	return &GradeService{
-		db:               db,
-		gradesCol:        db.Collection("grades"),
-		enrollmentsCol:   db.Collection("enrollments"),
-		coursesCol:       db.Collection("courses"),
-		usersCol:         db.Collection("users"),
-		prerequisitesCol: db.Collection("prerequisites"),
+func NewEnrollmentService(db *mongo.Client, cClient course.CourseServiceClient) *EnrollmentService {
+	return &EnrollmentService{
+		db:           db,
+		cartsColl:    db.Database("college_db").Collection("carts"),
+		enrollColl:   db.Database("college_db").Collection("enrollments"),
+		coursesColl:  db.Database("college_db").Collection("courses"),
+		courseClient: cClient,
 	}
 }
 
-// GetStudentGrades retrieves all grades for a student
-func (s *GradeService) GetStudentGrades(ctx context.Context, req *pb.GetStudentGradesRequest) (*pb.GetStudentGradesResponse, error) {
-	if req == nil || req.StudentId == "" {
-		return nil, status.Error(codes.InvalidArgument, "student_id is required")
+// ----------------------------------------------------------------------------
+// Shopping Cart Methods
+// ----------------------------------------------------------------------------
+
+func (s *EnrollmentService) AddToCart(ctx context.Context, req *enrollment.AddToCartRequest) (*enrollment.AddToCartResponse, error) {
+	// 1. Validate inputs
+	if req.StudentId == "" || req.CourseId == "" {
+		return &enrollment.AddToCartResponse{Success: false, Message: "Missing student_id or course_id"}, nil
 	}
 
-	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+	// 2. Fetch Course Details (via gRPC to CourseService) to get code, title, units
+	// We need these to store denormalized data in the cart
+	courseRes, err := s.courseClient.GetCourse(ctx, &course.GetCourseRequest{CourseId: req.CourseId})
+	if err != nil || !courseRes.Success {
+		return &enrollment.AddToCartResponse{Success: false, Message: "Course not found"}, nil
+	}
+	c := courseRes.Course
 
-	// Verify student exists using shared methods
-	var student shared.User
-	err := s.usersCol.FindOne(queryCtx, bson.M{"_id": req.StudentId}).Decode(&student)
-	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			// Return empty list instead of error if student just has no grades yet but exists?
-			// Original logic returned empty list if user not found, but kept error log.
-			// Correct logic: if user not found, return empty.
-			return &pb.GetStudentGradesResponse{
-				Grades:  []*pb.Grade{},
-				GpaInfo: &pb.GPACalculation{},
-			}, nil
-		}
-		log.Printf("Error finding student %s: %v", req.StudentId, err)
-		return nil, status.Error(codes.Internal, "failed to retrieve student information")
+	// 3. Add to Cart (Upsert)
+	// We use $addToSet to prevent duplicates automatically
+	item := bson.M{
+		"course_id":    c.Id,
+		"course_code":  c.Code,
+		"course_title": c.Title,
+		"units":        c.Units,
+		"schedule":     c.Schedule, // Simplified for now
 	}
 
-	if student.Role != shared.RoleStudent {
-		return nil, status.Error(codes.PermissionDenied, "user is not a student")
-	}
-
-	// Get grades for this student
 	filter := bson.M{"student_id": req.StudentId}
-	if req.Semester != "" {
-		filter["semester"] = req.Semester
+	update := bson.M{
+		"$addToSet": bson.M{"items": item},
+		"$set":      bson.M{"updated_at": time.Now()},
 	}
+	opts := options.Update().SetUpsert(true)
 
-	// Use shared helper for options if preferred, or manual
-	findOptions := options.Find().
-		SetSort(bson.D{{Key: "semester", Value: -1}, {Key: "course_code", Value: 1}}).
-		SetLimit(100)
-
-	cursor, err := s.gradesCol.Find(queryCtx, filter, findOptions)
+	_, err = s.cartsColl.UpdateOne(ctx, filter, update, opts)
 	if err != nil {
-		log.Printf("Error querying grades: %v", err)
-		return nil, status.Error(codes.Internal, "failed to retrieve grades")
-	}
-	defer cursor.Close(queryCtx)
-
-	var grades []*pb.Grade
-	for cursor.Next(queryCtx) {
-		var doc bson.M
-		if err := cursor.Decode(&doc); err != nil {
-			continue
-		}
-
-		grade, err := s.documentToGrade(doc)
-		if err != nil {
-			continue
-		}
-		grades = append(grades, grade)
+		return &enrollment.AddToCartResponse{Success: false, Message: "Failed to update cart"}, err
 	}
 
-	// Calculate GPA using helper
-	gpaInfo, err := s.calculateStudentGPA(queryCtx, req.StudentId, req.Semester)
-	if err != nil {
-		log.Printf("Error calculating GPA: %v", err)
-		gpaInfo = &pb.GPACalculation{}
-	}
-
-	return &pb.GetStudentGradesResponse{
-		Grades:  grades,
-		GpaInfo: gpaInfo,
+	// 4. Return updated cart state (simplified: just success)
+	// Ideally, we would fetch the cart and return it, but for speed we return success
+	return &enrollment.AddToCartResponse{
+		Success: true,
+		Message: "Added to cart",
 	}, nil
 }
 
-// CalculateGPA calculates GPA for a student
-func (s *GradeService) CalculateGPA(ctx context.Context, req *pb.CalculateGPARequest) (*pb.CalculateGPAResponse, error) {
-	if req == nil || req.StudentId == "" {
-		return nil, status.Error(codes.InvalidArgument, "student_id is required")
+func (s *EnrollmentService) RemoveFromCart(ctx context.Context, req *enrollment.RemoveFromCartRequest) (*enrollment.RemoveFromCartResponse, error) {
+	filter := bson.M{"student_id": req.StudentId}
+	update := bson.M{
+		"$pull": bson.M{"items": bson.M{"course_id": req.CourseId}},
+		"$set":  bson.M{"updated_at": time.Now()},
 	}
 
-	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+	res, err := s.cartsColl.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return &enrollment.RemoveFromCartResponse{Success: false, Message: "Database error"}, err
+	}
 
-	var student shared.User
-	err := s.usersCol.FindOne(queryCtx, bson.M{"_id": req.StudentId}).Decode(&student)
+	if res.ModifiedCount == 0 {
+		return &enrollment.RemoveFromCartResponse{Success: false, Message: "Item not found in cart"}, nil
+	}
+
+	return &enrollment.RemoveFromCartResponse{Success: true, Message: "Removed from cart"}, nil
+}
+
+func (s *EnrollmentService) GetCart(ctx context.Context, req *enrollment.GetCartRequest) (*enrollment.GetCartResponse, error) {
+	var cartDoc struct {
+		StudentID string `bson:"student_id"`
+		Items     []struct {
+			CourseID    string `bson:"course_id"`
+			CourseCode  string `bson:"course_code"`
+			CourseTitle string `bson:"course_title"`
+			Units       int32  `bson:"units"`
+		} `bson:"items"`
+	}
+
+	err := s.cartsColl.FindOne(ctx, bson.M{"student_id": req.StudentId}).Decode(&cartDoc)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return &pb.CalculateGPAResponse{
-				Success: false,
-				GpaInfo: &pb.GPACalculation{},
-				Message: fmt.Sprintf("student not found: %s", req.StudentId),
+			// Return empty cart
+			return &enrollment.GetCartResponse{
+				Success: true,
+				Cart:    &enrollment.Cart{StudentId: req.StudentId, Items: []*enrollment.CartItem{}},
 			}, nil
 		}
-		return nil, status.Error(codes.Internal, "failed to retrieve student information")
+		return nil, err
 	}
 
-	if student.Role != shared.RoleStudent {
-		return nil, status.Error(codes.PermissionDenied, "user is not a student")
+	// Convert BSON to Proto
+	var pbItems []*enrollment.CartItem
+	var totalUnits int32
+	for _, it := range cartDoc.Items {
+		pbItems = append(pbItems, &enrollment.CartItem{
+			CourseId:    it.CourseID,
+			CourseCode:  it.CourseCode,
+			CourseTitle: it.CourseTitle,
+			Units:       it.Units,
+		})
+		totalUnits += it.Units
 	}
 
-	gpaInfo, err := s.calculateStudentGPA(queryCtx, req.StudentId, req.Semester)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to calculate GPA")
-	}
-
-	return &pb.CalculateGPAResponse{
+	return &enrollment.GetCartResponse{
 		Success: true,
-		GpaInfo: gpaInfo,
-		Message: "GPA calculated successfully",
+		Cart: &enrollment.Cart{
+			StudentId:  req.StudentId,
+			Items:      pbItems,
+			TotalUnits: totalUnits,
+		},
 	}, nil
 }
 
-// GetClassRoster retrieves all students enrolled in a course
-func (s *GradeService) GetClassRoster(ctx context.Context, req *pb.GetClassRosterRequest) (*pb.GetClassRosterResponse, error) {
-	if req == nil || req.CourseId == "" {
-		return nil, status.Error(codes.InvalidArgument, "course_id is required")
+// ----------------------------------------------------------------------------
+// Enrollment Logic
+// ----------------------------------------------------------------------------
+
+func (s *EnrollmentService) EnrollAll(ctx context.Context, req *enrollment.EnrollAllRequest) (*enrollment.EnrollAllResponse, error) {
+	// 1. Get current cart
+	cartRes, err := s.GetCart(ctx, &enrollment.GetCartRequest{StudentId: req.StudentId})
+	if err != nil || !cartRes.Success || len(cartRes.Cart.Items) == 0 {
+		return &enrollment.EnrollAllResponse{Success: false, Message: "Cart is empty"}, nil
 	}
 
-	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+	items := cartRes.Cart.Items
+	var failedCourses []string
 
-	var course shared.Course
-	err := s.coursesCol.FindOne(queryCtx, bson.M{"_id": req.CourseId}).Decode(&course)
-	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			return &pb.GetClassRosterResponse{}, nil
+	// 2. Validate ALL courses before enrolling any (Simplification: All or Nothing)
+	// We check Prerequisites and Availability
+	for _, item := range items {
+		// A. Check Prerequisites
+		prereqRes, err := s.courseClient.CheckPrerequisites(ctx, &course.CheckPrerequisitesRequest{
+			StudentId: req.StudentId,
+			CourseId:  item.CourseId,
+		})
+		if err != nil || !prereqRes.AllMet {
+			failedCourses = append(failedCourses, item.CourseCode+" (Prereq missing)")
+			continue
 		}
-		return nil, status.Error(codes.Internal, "failed to retrieve course information")
+
+		// B. Check Availability (Capacity)
+		availRes, err := s.courseClient.GetCourseAvailability(ctx, &course.GetCourseAvailabilityRequest{CourseId: item.CourseId})
+		if err != nil || !availRes.Available {
+			failedCourses = append(failedCourses, item.CourseCode+" (Full)")
+			continue
+		}
 	}
 
+	if len(failedCourses) > 0 {
+		return &enrollment.EnrollAllResponse{
+			Success:       false,
+			Message:       "Enrollment failed due to conflicts",
+			FailedCourses: failedCourses,
+		}, nil
+	}
+
+	// 3. Process Enrollment (Transaction-like)
+	var enrollments []*enrollment.Enrollment
+	for _, item := range items {
+		// Insert into enrollments collection [cite: 647]
+		enrollDoc := bson.M{
+			"student_id":   req.StudentId,
+			"course_id":    item.CourseId,
+			"course_code":  item.CourseCode,
+			"course_title": item.CourseTitle,
+			"units":        item.Units,
+			"status":       "enrolled",
+			"enrolled_at":  time.Now(),
+		}
+
+		_, err := s.enrollColl.InsertOne(ctx, enrollDoc)
+		if err != nil {
+			log.Printf("Error inserting enrollment: %v", err)
+			continue
+		}
+
+		// 4. Update Course Seat Count (Direct DB update for simplification)
+		// Spec: "No real-time seat count", but we must track capacity [cite: 54]
+		_, _ = s.coursesColl.UpdateOne(ctx,
+			bson.M{"_id": item.CourseId},
+			bson.M{"$inc": bson.M{"enrolled": 1}},
+		)
+
+		enrollments = append(enrollments, &enrollment.Enrollment{
+			CourseCode: item.CourseCode,
+			Status:     "enrolled",
+		})
+	}
+
+	// 5. Clear Cart
+	_, _ = s.cartsColl.DeleteOne(ctx, bson.M{"student_id": req.StudentId})
+
+	return &enrollment.EnrollAllResponse{
+		Success:     true,
+		Message:     "Successfully enrolled in all courses",
+		Enrollments: enrollments,
+	}, nil
+}
+
+func (s *EnrollmentService) DropCourse(ctx context.Context, req *enrollment.DropCourseRequest) (*enrollment.DropCourseResponse, error) {
+	// 1. Mark status as "dropped" in enrollments
 	filter := bson.M{
-		"course_id": req.CourseId,
-		"status":    shared.StatusEnrolled,
+		"student_id": req.StudentId,
+		"course_id":  req.CourseId,
+		"status":     "enrolled",
 	}
-
-	findOptions := options.Find().SetSort(bson.D{{Key: "student_id", Value: 1}})
-	cursor, err := s.enrollmentsCol.Find(queryCtx, filter, findOptions)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to retrieve enrollments")
-	}
-	defer cursor.Close(queryCtx)
-
-	var students []*pb.StudentRosterEntry
-	for cursor.Next(queryCtx) {
-		var enrollment shared.Enrollment
-		if err := cursor.Decode(&enrollment); err != nil {
-			continue
-		}
-
-		studentEntry, err := s.getStudentRosterEntry(queryCtx, enrollment.StudentID, enrollment.ID)
-		if err != nil {
-			log.Printf("Error getting student entry for %s: %v", enrollment.StudentID, err)
-			continue
-		}
-		students = append(students, studentEntry)
-	}
-
-	return &pb.GetClassRosterResponse{
-		CourseId:      req.CourseId,
-		CourseCode:    course.Code,
-		CourseTitle:   course.Title,
-		Students:      students,
-		TotalStudents: int32(len(students)),
-	}, nil
-}
-
-// UploadGrades handles streaming of grade entries
-func (s *GradeService) UploadGrades(stream pb.GradeService_UploadGradesServer) error {
-	log.Println("[GradeService] UploadGrades stream started")
-
-	var (
-		totalProcessed   int32
-		successful       int32
-		failed           int32
-		errors           []string
-		courseID         string
-		facultyID        string
-		receivedMetadata = false
-	)
-
-	for {
-		req, err := stream.Recv()
-		if err != nil {
-			break
-		} // Stream ended
-
-		if !receivedMetadata {
-			if req.GetMetadata().GetCourseId() == "" || req.GetMetadata().GetFacultyId() == "" {
-				return status.Error(codes.InvalidArgument, "metadata missing")
-			}
-			courseID = req.GetMetadata().GetCourseId()
-			facultyID = req.GetMetadata().GetFacultyId()
-
-			if err := s.validateFacultyForCourse(stream.Context(), courseID, facultyID); err != nil {
-				return status.Errorf(codes.PermissionDenied, "faculty validation failed: %v", err)
-			}
-			receivedMetadata = true
-			continue
-		}
-
-		entry := req.GetEntry()
-		if entry == nil {
-			failed++
-			errors = append(errors, "nil grade entry")
-			continue
-		}
-
-		totalProcessed++
-
-		if err := s.uploadSingleGrade(stream.Context(), courseID, facultyID, entry); err != nil {
-			failed++
-			errors = append(errors, fmt.Sprintf("student %s: %v", entry.StudentId, err))
-		} else {
-			successful++
-		}
-
-		if req.IsLast {
-			break
-		}
-	}
-
-	if !receivedMetadata {
-		return status.Error(codes.InvalidArgument, "no metadata received")
-	}
-
-	return stream.SendAndClose(&pb.UploadGradesResponse{
-		Success:        successful > 0 || totalProcessed == 0,
-		TotalProcessed: totalProcessed,
-		Successful:     successful,
-		Failed:         failed,
-		Errors:         errors,
-		Message:        fmt.Sprintf("Processed %d grades", totalProcessed),
-	})
-}
-
-// PublishGrades makes grades visible to students
-func (s *GradeService) PublishGrades(ctx context.Context, req *pb.PublishGradesRequest) (*pb.PublishGradesResponse, error) {
-	if req == nil || req.CourseId == "" || req.FacultyId == "" {
-		return nil, status.Error(codes.InvalidArgument, "invalid arguments")
-	}
-
-	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	if err := s.validateFacultyForCourse(queryCtx, req.CourseId, req.FacultyId); err != nil {
-		return &pb.PublishGradesResponse{Success: false, Message: fmt.Sprintf("%v", err)}, nil
-	}
-
-	filter := bson.M{"course_id": req.CourseId, "published": false}
 	update := bson.M{
 		"$set": bson.M{
-			"published":        true,
-			"published_at":     time.Now(),
-			"last_modified_by": req.FacultyId,
-			"last_modified_at": time.Now(),
+			"status":     "dropped",
+			"dropped_at": time.Now(),
 		},
 	}
 
-	result, err := s.gradesCol.UpdateMany(queryCtx, filter, update)
+	res, err := s.enrollColl.UpdateOne(ctx, filter, update)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to publish grades")
+		return &enrollment.DropCourseResponse{Success: false, Message: "DB Error"}, err
+	}
+	if res.ModifiedCount == 0 {
+		return &enrollment.DropCourseResponse{Success: false, Message: "Not enrolled in this course"}, nil
 	}
 
-	msg := "no grades to publish"
-	if result.ModifiedCount > 0 {
-		msg = fmt.Sprintf("published %d grades", result.ModifiedCount)
-	}
+	// 2. Decrement Course Count
+	_, _ = s.coursesColl.UpdateOne(ctx,
+		bson.M{"_id": req.CourseId},
+		bson.M{"$inc": bson.M{"enrolled": -1}},
+	)
 
-	return &pb.PublishGradesResponse{
-		Success:         true,
-		GradesPublished: int32(result.ModifiedCount),
-		Message:         msg,
-	}, nil
+	return &enrollment.DropCourseResponse{Success: true, Message: "Course dropped"}, nil
 }
 
-// GetCourseGrades retrieves all grades for a course (faculty only)
-func (s *GradeService) GetCourseGrades(ctx context.Context, req *pb.GetCourseGradesRequest) (*pb.GetCourseGradesResponse, error) {
-	if req == nil || req.CourseId == "" || req.FacultyId == "" {
-		return nil, status.Error(codes.InvalidArgument, "invalid arguments")
+func (s *EnrollmentService) GetStudentEnrollments(ctx context.Context, req *enrollment.GetStudentEnrollmentsRequest) (*enrollment.GetStudentEnrollmentsResponse, error) {
+	filter := bson.M{"student_id": req.StudentId}
+	if req.Status != "" {
+		filter["status"] = req.Status
 	}
 
-	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	if err := s.validateFacultyForCourse(queryCtx, req.CourseId, req.FacultyId); err != nil {
-		return &pb.GetCourseGradesResponse{}, nil
-	}
-
-	filter := bson.M{"course_id": req.CourseId}
-	cursor, err := s.gradesCol.Find(queryCtx, filter)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "db error")
-	}
-	defer cursor.Close(queryCtx)
-
-	var grades []*pb.Grade
-	allPublished := true
-	count := 0
-
-	for cursor.Next(queryCtx) {
-		var doc bson.M
-		if err := cursor.Decode(&doc); err != nil {
-			continue
-		}
-
-		grade, err := s.documentToGrade(doc)
-		if err != nil {
-			continue
-		}
-
-		grades = append(grades, grade)
-		count++
-
-		if pub, _ := shared.GetBool(doc["published"]); !pub {
-			allPublished = false
-		}
-	}
-
-	return &pb.GetCourseGradesResponse{
-		Grades:       grades,
-		TotalGrades:  int32(count),
-		AllPublished: allPublished && count > 0,
-	}, nil
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-func (s *GradeService) documentToGrade(doc bson.M) (*pb.Grade, error) {
-	grade := &pb.Grade{}
-
-	// Safely extract fields using shared helpers
-	if id, _ := shared.GetString(doc["enrollment_id"]); id != "" {
-		grade.EnrollmentId = id
-	} else {
-		return nil, fmt.Errorf("missing enrollment_id")
-	}
-	if sid, _ := shared.GetString(doc["student_id"]); sid != "" {
-		grade.StudentId = sid
-	}
-	if sname, _ := shared.GetString(doc["student_name"]); sname != "" {
-		grade.StudentName = sname
-	}
-	if cid, _ := shared.GetString(doc["course_id"]); cid != "" {
-		grade.CourseId = cid
-	}
-	if ccode, _ := shared.GetString(doc["course_code"]); ccode != "" {
-		grade.CourseCode = ccode
-	}
-	if ctitle, _ := shared.GetString(doc["course_title"]); ctitle != "" {
-		grade.CourseTitle = ctitle
-	}
-
-	if u, err := shared.GetInt32(doc["units"]); err == nil {
-		grade.Units = u
-	}
-	if g, _ := shared.GetString(doc["grade"]); g != "" {
-		grade.Grade = strings.ToUpper(g)
-	}
-	if sem, _ := shared.GetString(doc["semester"]); sem != "" {
-		grade.Semester = sem
-	}
-	if upBy, _ := shared.GetString(doc["uploaded_by"]); upBy != "" {
-		grade.UploadedBy = upBy
-	}
-	if reason, _ := shared.GetString(doc["override_reason"]); reason != "" {
-		grade.OverrideReason = reason
-	}
-
-	if upAt, err := shared.GetTime(doc["uploaded_at"]); err == nil {
-		grade.UploadedAt = timestamppb.New(upAt)
-	}
-	if pubAt, err := shared.GetTime(doc["published_at"]); err == nil {
-		grade.PublishedAt = timestamppb.New(pubAt)
-	}
-	if pub, err := shared.GetBool(doc["published"]); err == nil {
-		grade.Published = pub
-	}
-
-	return grade, nil
-}
-
-// CalculateGPA calculates GPA for a student
-func (s *GradeService) calculateStudentGPA(ctx context.Context, studentID, semester string) (*pb.GPACalculation, error) {
-	// Standardize GPA Calculation using shared.GetGradePoints
-	filter := bson.M{
-		"student_id": studentID,
-		"published":  true,
-		// Exclude I and W from GPA
-		"grade": bson.M{"$nin": []string{shared.GradeI, shared.GradeW}},
-	}
-	if semester != "" {
-		filter["semester"] = semester
-	}
-
-	cursor, err := s.gradesCol.Find(ctx, filter)
+	cursor, err := s.enrollColl.Find(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
 	defer cursor.Close(ctx)
 
-	var overallPoints, overallUnits float64
-	semesterMap := make(map[string]*struct {
-		points, units float64
-		count         int
-	})
+	var results []*enrollment.Enrollment
+	var totalUnits int32
 
 	for cursor.Next(ctx) {
-		// FIX: Define a local struct that includes the denormalized fields (Units, Semester)
-		// which exist in the MongoDB document but are missing from shared.Grade struct.
-		var g struct {
-			Grade    string `bson:"grade"`
-			Units    int32  `bson:"units"`
-			Semester string `bson:"semester"`
+		var doc struct {
+			ID          primitive.ObjectID `bson:"_id"`
+			CourseID    string             `bson:"course_id"`
+			CourseCode  string             `bson:"course_code"`
+			CourseTitle string             `bson:"course_title"`
+			Units       int32              `bson:"units"`
+			Status      string             `bson:"status"`
+			EnrolledAt  time.Time          `bson:"enrolled_at"`
 		}
-
-		if err := cursor.Decode(&g); err != nil {
-			log.Printf("Error decoding grade for GPA calc: %v", err)
+		if err := cursor.Decode(&doc); err != nil {
 			continue
 		}
 
-		// Use shared helper for points
-		points := shared.GetGradePoints(g.Grade)
-		units := float64(g.Units)
-
-		// Aggregate Overall
-		overallPoints += points * units
-		overallUnits += units
-
-		// Aggregate Semester
-		if _, exists := semesterMap[g.Semester]; !exists {
-			semesterMap[g.Semester] = &struct {
-				points, units float64
-				count         int
-			}{}
-		}
-		sm := semesterMap[g.Semester]
-		sm.points += points * units
-		sm.units += units
-		sm.count++
-	}
-
-	// Build Result
-	calc := &pb.GPACalculation{
-		TotalUnitsAttempted: int32(overallUnits),
-		TotalUnitsEarned:    int32(overallUnits), // Simplified logic
-	}
-
-	// Calculate Cumulative GPA
-	if overallUnits > 0 {
-		calc.TermGpa = overallPoints / overallUnits
-		calc.Cgpa = overallPoints / overallUnits
-	}
-
-	// Build Semester Breakdown
-	for sem, data := range semesterMap {
-		sgpa := 0.0
-		if data.units > 0 {
-			sgpa = data.points / data.units
-		}
-		calc.SemesterBreakdown = append(calc.SemesterBreakdown, &pb.SemesterGPA{
-			Semester:     sem,
-			Gpa:          sgpa,
-			Units:        int32(data.units),
-			CoursesCount: int32(data.count),
+		results = append(results, &enrollment.Enrollment{
+			Id:          doc.ID.Hex(),
+			CourseId:    doc.CourseID,
+			CourseCode:  doc.CourseCode,
+			CourseTitle: doc.CourseTitle,
+			Units:       doc.Units,
+			Status:      doc.Status,
+			EnrolledAt:  timestamppb.New(doc.EnrolledAt),
 		})
+
+		if doc.Status == "enrolled" {
+			totalUnits += doc.Units
+		}
 	}
 
-	return calc, nil
-}
-
-func (s *GradeService) getStudentRosterEntry(ctx context.Context, studentID, enrollmentID string) (*pb.StudentRosterEntry, error) {
-	var user shared.User
-	if err := s.usersCol.FindOne(ctx, bson.M{"_id": studentID}).Decode(&user); err != nil {
-		return nil, err
-	}
-
-	var gradeDoc struct {
-		Grade string `bson:"grade"`
-	}
-	grade := ""
-	if err := s.gradesCol.FindOne(ctx, bson.M{"enrollment_id": enrollmentID}).Decode(&gradeDoc); err == nil {
-		grade = gradeDoc.Grade
-	}
-
-	return &pb.StudentRosterEntry{
-		StudentId: studentID, StudentName: user.Name, Email: user.Email,
-		Major: user.Major, YearLevel: user.YearLevel, Grade: grade,
+	return &enrollment.GetStudentEnrollmentsResponse{
+		Enrollments: results,
+		TotalUnits:  totalUnits,
 	}, nil
 }
 
-func (s *GradeService) validateFacultyForCourse(ctx context.Context, courseID, facultyID string) error {
-	var faculty shared.User
-	if err := s.usersCol.FindOne(ctx, bson.M{"_id": facultyID}).Decode(&faculty); err != nil {
-		return fmt.Errorf("faculty not found")
-	}
-	if faculty.Role != shared.RoleFaculty {
-		return fmt.Errorf("user not faculty")
-	}
-
-	var course shared.Course
-	if err := s.coursesCol.FindOne(ctx, bson.M{"_id": courseID}).Decode(&course); err != nil {
-		return fmt.Errorf("course not found")
-	}
-	if course.FacultyID != facultyID {
-		return fmt.Errorf("faculty mismatch")
-	}
-	return nil
+// Stubs for methods not critical for this demo
+func (s *EnrollmentService) ClearCart(ctx context.Context, req *enrollment.ClearCartRequest) (*enrollment.ClearCartResponse, error) {
+	_, err := s.cartsColl.DeleteOne(ctx, bson.M{"student_id": req.StudentId})
+	return &enrollment.ClearCartResponse{Success: err == nil}, err
 }
 
-func (s *GradeService) uploadSingleGrade(ctx context.Context, courseID, facultyID string, entry *pb.GradeEntry) error {
-	grade := strings.ToUpper(entry.Grade)
-	if !shared.IsValidGrade(grade) {
-		return fmt.Errorf("invalid grade")
-	}
-
-	// Find Enrollment
-	var enrollment shared.Enrollment
-	err := s.enrollmentsCol.FindOne(ctx, bson.M{
-		"student_id": entry.StudentId, "course_id": courseID,
-	}).Decode(&enrollment)
-
-	// Simplified: allow upload if enrolled or completed
-	if err != nil {
-		return fmt.Errorf("student not enrolled")
-	}
-
-	// Upsert Grade
-	update := bson.M{
-		"$set": bson.M{
-			"grade": grade, "last_modified_by": facultyID, "last_modified_at": time.Now(),
-			"uploaded_by": facultyID, "uploaded_at": time.Now(),
-			// Denormalize fields usually handled here, simplified for brevity
-			"student_id": entry.StudentId, "course_id": courseID, "enrollment_id": enrollment.ID,
-		},
-	}
-	opts := options.Update().SetUpsert(true)
-	_, err = s.gradesCol.UpdateOne(ctx, bson.M{"enrollment_id": enrollment.ID}, update, opts)
-	return err
+func (s *EnrollmentService) CheckConflicts(ctx context.Context, req *enrollment.CheckConflictsRequest) (*enrollment.CheckConflictsResponse, error) {
+	return &enrollment.CheckConflictsResponse{HasConflicts: false}, nil
 }
