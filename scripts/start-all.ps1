@@ -6,6 +6,8 @@ Write-Host ""
 # Get the project root directory
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $BackendPath = Join-Path $ProjectRoot "backend"
+# Update path to point to cmd for entry points
+$CmdPath = Join-Path $BackendPath "cmd"
 
 # Array to store all running processes
 $Global:ServiceProcesses = @()
@@ -27,10 +29,11 @@ function Start-Service {
     }
     
     # Start the service in a new PowerShell window
+    # Added: Explicitly set the Window Title for easier stopping later
     $process = Start-Process powershell -ArgumentList @(
         "-NoExit",
         "-Command",
-        "cd '$ServicePath'; Write-Host 'Starting $ServiceName...' -ForegroundColor Green; go run ."
+        "`$host.ui.RawUI.WindowTitle = '$ServiceName'; cd '$ServicePath'; Write-Host 'Starting $ServiceName...' -ForegroundColor Green; go run ."
     ) -PassThru -WindowStyle Normal
     
     if ($process) {
@@ -44,28 +47,28 @@ function Start-Service {
     }
 }
 
-# Start Auth Service
-$authPath = Join-Path $BackendPath "auth-service"
+# Start Auth Service (Updated path to cmd/auth)
+$authPath = Join-Path $CmdPath "auth"
 $authProc = Start-Service -ServiceName "Auth Service" -ServicePath $authPath -Port "50051"
 if ($authProc) { $Global:ServiceProcesses += $authProc }
 
-# Start Course Service
-$coursePath = Join-Path $BackendPath "course-service"
+# Start Course Service (Updated path to cmd/course)
+$coursePath = Join-Path $CmdPath "course"
 $courseProc = Start-Service -ServiceName "Course Service" -ServicePath $coursePath -Port "50052"
 if ($courseProc) { $Global:ServiceProcesses += $courseProc }
 
-# Start Enrollment Service
-$enrollPath = Join-Path $BackendPath "enrollment-service"
+# Start Enrollment Service (Updated path to cmd/enrollment)
+$enrollPath = Join-Path $CmdPath "enrollment"
 $enrollProc = Start-Service -ServiceName "Enrollment Service" -ServicePath $enrollPath -Port "50053"
 if ($enrollProc) { $Global:ServiceProcesses += $enrollProc }
 
-# Start Grade Service
-$gradePath = Join-Path $BackendPath "grade-service"
+# Start Grade Service (Updated path to cmd/grade)
+$gradePath = Join-Path $CmdPath "grade"
 $gradeProc = Start-Service -ServiceName "Grade Service" -ServicePath $gradePath -Port "50054"
 if ($gradeProc) { $Global:ServiceProcesses += $gradeProc }
 
-# Start Admin Service
-$adminPath = Join-Path $BackendPath "admin-service"
+# Start Admin Service (Updated path to cmd/admin)
+$adminPath = Join-Path $CmdPath "admin"
 $adminProc = Start-Service -ServiceName "Admin Service" -ServicePath $adminPath -Port "50055"
 if ($adminProc) { $Global:ServiceProcesses += $adminProc }
 
@@ -74,8 +77,8 @@ Write-Host ""
 Write-Host "Waiting for services to initialize..." -ForegroundColor Yellow
 Start-Sleep -Seconds 5
 
-# Start Gateway
-$gatewayPath = Join-Path $BackendPath "gateway"
+# Start Gateway (Updated path to cmd/gateway)
+$gatewayPath = Join-Path $CmdPath "gateway"
 $gatewayProc = Start-Service -ServiceName "Gateway" -ServicePath $gatewayPath -Port "8080"
 if ($gatewayProc) { $Global:ServiceProcesses += $gatewayProc }
 
