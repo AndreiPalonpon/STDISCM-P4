@@ -17,8 +17,9 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	pb "stdiscm_p4/backend/pb/course"
-	"stdiscm_p4/backend/shared"
+	"stdiscm_p4/backend/internal/course"
+	pb "stdiscm_p4/backend/internal/pb/course"
+	"stdiscm_p4/backend/internal/shared"
 )
 
 func main() {
@@ -65,7 +66,7 @@ func main() {
 	)
 
 	// Initialize and register Course Service
-	courseService := NewCourseService(db)
+	courseService := course.NewCourseService(db)
 	pb.RegisterCourseServiceServer(grpcServer, courseService)
 
 	// Register health check service

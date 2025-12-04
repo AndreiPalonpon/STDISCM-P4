@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"stdiscm_p4/backend/internal/gateway"
 	"syscall"
 	"time"
 )
@@ -14,14 +15,14 @@ func main() {
 
 	// 1. Initialize gRPC Clients
 	// This connects to all 5 backend microservices
-	serviceClients := NewServiceClients()
+	serviceClients := gateway.NewServiceClients()
 	defer serviceClients.Close()
 
 	// 2. Setup Routes and Middleware
-	router := SetupRoutes(serviceClients)
+	router := gateway.SetupRoutes(serviceClients)
 
 	// 3. Configure Server
-	port := getEnv("PORT", "8080")
+	port := gateway.GetEnv("PORT", "8080")
 	server := &http.Server{
 		Addr:         ":" + port,
 		Handler:      router,

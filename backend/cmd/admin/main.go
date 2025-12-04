@@ -12,9 +12,9 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	// Ensure this path matches your go.mod module name
-	pb "stdiscm_p4/backend/pb/auth"
-	"stdiscm_p4/backend/shared"
+	"stdiscm_p4/backend/internal/admin"
+	pb "stdiscm_p4/backend/internal/pb/admin"
+	"stdiscm_p4/backend/internal/shared"
 )
 
 func main() {
@@ -23,13 +23,13 @@ func main() {
 		log.Println("Warning: .env file not found, using system environment variables")
 	}
 
-	// 1. Load Configuration (validates JWT_SECRET is present)
-	cfg, err := shared.LoadServiceConfig("auth-service")
+	// 1. Load Configuration using Shared Package
+	cfg, err := shared.LoadServiceConfig("admin-service")
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// 2. Connect to MongoDB
+	// 2. Connect to MongoDB using Shared Package
 	client, db, err := shared.ConnectMongoDB(&cfg.MongoDB)
 	if err != nil {
 		log.Fatalf("Failed to connect to MongoDB: %v", err)
@@ -41,15 +41,15 @@ func main() {
 		grpc.MaxSendMsgSize(cfg.GRPC.MaxSendMsgSize),
 	)
 
-	// 4. Initialize Auth Service
-	// We pass the full config to access Security settings (JWT Secret, BCrypt cost)
-	authService := NewAuthService(db, cfg)
-	pb.RegisterAuthServiceServer(grpcServer, authService)
+	// 4. Initialize and Register Admin Service
+	// We pass the client to support transactions in Override functions
+	adminService := admin.NewAdminService(client, db, cfg)
+	pb.RegisterAdminServiceServer(grpcServer, adminService)
 
-	// 5. Register Health Server
+	// 5. Register Health Check
 	healthServer := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
-	healthServer.SetServingStatus("auth.AuthService", grpc_health_v1.HealthCheckResponse_SERVING)
+	healthServer.SetServingStatus("admin.AdminService", grpc_health_v1.HealthCheckResponse_SERVING)
 
 	// 6. Register Reflection
 	reflection.Register(grpcServer)
@@ -60,9 +60,9 @@ func main() {
 		log.Fatalf("Failed to listen on port %s: %v", cfg.ServicePort, err)
 	}
 
-	// 8. Graceful Shutdown
+	// 8. Graceful Shutdown Handling
 	go func() {
-		log.Printf("Auth Service is listening on port %s", cfg.ServicePort)
+		log.Printf("Admin Service is listening on port %s", cfg.ServicePort)
 		if err := grpcServer.Serve(listener); err != nil {
 			log.Fatalf("Failed to serve: %v", err)
 		}
@@ -73,12 +73,15 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down Auth Service...")
-	healthServer.SetServingStatus("auth.AuthService", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+	log.Println("Shutting down Admin Service...")
+
+	healthServer.SetServingStatus("admin.AdminService", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
 	grpcServer.GracefulStop()
 
+	// Use shared disconnect helper
 	if err := shared.DisconnectMongoDB(client); err != nil {
 		log.Printf("Error disconnecting from MongoDB: %v", err)
 	}
-	log.Println("Auth Service stopped")
+
+	log.Println("Admin Service stopped")
 }

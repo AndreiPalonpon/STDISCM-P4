@@ -12,8 +12,9 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	pb "stdiscm_p4/backend/pb/grade"
-	"stdiscm_p4/backend/shared"
+	"stdiscm_p4/backend/internal/grade"
+	pb "stdiscm_p4/backend/internal/pb/grade"
+	"stdiscm_p4/backend/internal/shared"
 )
 
 func main() {
@@ -42,7 +43,7 @@ func main() {
 	)
 
 	// 4. Initialize and Register Grade Service
-	gradeService := NewGradeService(db)
+	gradeService := grade.NewGradeService(db)
 	pb.RegisterGradeServiceServer(grpcServer, gradeService)
 
 	// 5. Register Health Check

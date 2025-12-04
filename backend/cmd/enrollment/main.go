@@ -18,9 +18,10 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	pb_course "stdiscm_p4/backend/pb/course"
-	pb "stdiscm_p4/backend/pb/enrollment"
-	"stdiscm_p4/backend/shared"
+	"stdiscm_p4/backend/internal/enrollment"
+	pb_course "stdiscm_p4/backend/internal/pb/course"
+	pb "stdiscm_p4/backend/internal/pb/enrollment"
+	"stdiscm_p4/backend/internal/shared"
 )
 
 func main() {
@@ -78,7 +79,7 @@ func main() {
 
 	// Initialize and register Enrollment Service
 	// We pass mongoClient for transactions, db for collections, and courseClient for inter-service calls
-	enrollmentService := NewEnrollmentService(mongoClient, db, courseClient)
+	enrollmentService := enrollment.NewEnrollmentService(mongoClient, db, courseClient)
 	pb.RegisterEnrollmentServiceServer(grpcServer, enrollmentService)
 
 	// Register health check service
