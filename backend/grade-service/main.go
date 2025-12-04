@@ -1,86 +1,62 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	"github.com/joho/godotenv"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
 	pb "stdiscm_p4/backend/pb/grade"
+	"stdiscm_p4/backend/shared"
 )
 
 func main() {
-	// Load environment variables
-	if err := godotenv.Load(); err != nil {
-		log.Println("Warning: .env file not found, using system environment variables")
+	// 1. Load Configuration using Shared Package
+	// Ensure your .env uses keys: SERVICE_PORT, MONGO_URI, MONGO_DB_NAME
+	cfg, err := shared.LoadServiceConfig(".env")
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Get configuration from environment
-	port := getEnv("GRADE_SERVICE_PORT", "50053")
-	mongoURI := getEnv("GRADE_MONGO_URI", "mongodb://localhost:27017")
-	dbName := getEnv("MONGO_DB_NAME", "ProblemSet4")
-
-	// Connect to MongoDB
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	clientOptions := options.Client().ApplyURI(mongoURI).
-		SetMaxPoolSize(50).
-		SetMinPoolSize(10).
-		SetMaxConnIdleTime(30 * time.Second)
-
-	mongoClient, err := mongo.Connect(ctx, clientOptions)
+	// 2. Connect to MongoDB using Shared Package
+	client, db, err := shared.ConnectMongoDB(&cfg.MongoDB)
 	if err != nil {
 		log.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
 
-	// Ping MongoDB to verify connection
-	if err := mongoClient.Ping(ctx, nil); err != nil {
-		log.Fatalf("Failed to ping MongoDB: %v", err)
-	}
-	log.Println("Successfully connected to MongoDB")
-
-	// Initialize database
-	db := mongoClient.Database(dbName)
-
-	// Create gRPC server
+	// 3. Create gRPC Server with config
 	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(10*1024*1024), // 10MB
-		grpc.MaxSendMsgSize(10*1024*1024), // 10MB
+		grpc.MaxRecvMsgSize(cfg.GRPC.MaxRecvMsgSize),
+		grpc.MaxSendMsgSize(cfg.GRPC.MaxSendMsgSize),
 	)
 
-	// Initialize and register Grade Service
+	// 4. Initialize and Register Grade Service
 	gradeService := NewGradeService(db)
 	pb.RegisterGradeServiceServer(grpcServer, gradeService)
 
-	// Register health check service
+	// 5. Register Health Check
 	healthServer := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
 	healthServer.SetServingStatus("grade.GradeService", grpc_health_v1.HealthCheckResponse_SERVING)
 
-	// Register reflection service (useful for debugging with grpcurl)
+	// 6. Register Reflection
 	reflection.Register(grpcServer)
 
-	// Start listening
-	listener, err := net.Listen("tcp", ":"+port)
+	// 7. Start Listening
+	listener, err := net.Listen("tcp", ":"+cfg.ServicePort)
 	if err != nil {
-		log.Fatalf("Failed to listen on port %s: %v", port, err)
+		log.Fatalf("Failed to listen on port %s: %v", cfg.ServicePort, err)
 	}
 
-	// Graceful shutdown handling
+	// 8. Graceful Shutdown Handling
 	go func() {
-		log.Printf("Grade Service is listening on port %s", port)
+		log.Printf("Grade Service is listening on port %s", cfg.ServicePort)
 		if err := grpcServer.Serve(listener); err != nil {
 			log.Fatalf("Failed to serve: %v", err)
 		}
@@ -93,24 +69,13 @@ func main() {
 
 	log.Println("Shutting down Grade Service...")
 
-	// Set health check to NOT_SERVING
 	healthServer.SetServingStatus("grade.GradeService", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
-
-	// Graceful shutdown
 	grpcServer.GracefulStop()
 
-	// Disconnect from MongoDB
-	if err := mongoClient.Disconnect(context.Background()); err != nil {
+	// Use shared disconnect helper
+	if err := shared.DisconnectMongoDB(client); err != nil {
 		log.Printf("Error disconnecting from MongoDB: %v", err)
 	}
 
 	log.Println("Grade Service stopped")
-}
-
-// getEnv retrieves environment variable or returns default value
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }

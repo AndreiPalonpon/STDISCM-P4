@@ -1,63 +1,67 @@
+// ============================================================================
+// backend/course-service/main.go
+// Entry point for the Course Service (Refactored)
+// ============================================================================
+
 package main
 
 import (
-	"context"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	"github.com/joho/godotenv"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
 	pb "stdiscm_p4/backend/pb/course"
+	"stdiscm_p4/backend/shared"
 )
 
 func main() {
 	// Load environment variables
-	if err := godotenv.Load(); err != nil {
+	if err := shared.LoadEnv(".env"); err != nil {
 		log.Println("Warning: .env file not found, using system environment variables")
 	}
 
-	// Get configuration from environment
-	port := getEnv("COURSE_SERVICE_PORT", "50052")
-	mongoURI := getEnv("COURSE_MONGO_URI", "mongodb://localhost:27017")
-	dbName := getEnv("MONGO_DB_NAME", "ProblemSet4")
+	// Load service configuration
+	config, err := shared.LoadServiceConfig("course-service")
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
 
-	// Connect to MongoDB
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Override with service-specific env vars if present
+	config.ServicePort = shared.GetEnv("COURSE_SERVICE_PORT", shared.DefaultCourseServicePort)
+	config.MongoDB.URI = shared.GetEnv("COURSE_MONGO_URI", config.MongoDB.URI)
 
-	clientOptions := options.Client().ApplyURI(mongoURI).
-		SetMaxPoolSize(50).
-		SetMinPoolSize(10).
-		SetMaxConnIdleTime(30 * time.Second)
+	// Validate configuration
+	if err := shared.ValidateServiceConfig(config); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
 
-	mongoClient, err := mongo.Connect(ctx, clientOptions)
+	// Print configuration in development mode
+	if shared.IsDevelopment(config) {
+		shared.PrintConfig(config)
+	}
+
+	// Connect to MongoDB Atlas
+	mongoClient, db, err := shared.ConnectMongoDB(&config.MongoDB)
 	if err != nil {
 		log.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
+	defer func() {
+		if err := shared.DisconnectMongoDB(mongoClient); err != nil {
+			log.Printf("Error disconnecting from MongoDB: %v", err)
+		}
+	}()
 
-	// Ping MongoDB to verify connection
-	if err := mongoClient.Ping(ctx, nil); err != nil {
-		log.Fatalf("Failed to ping MongoDB: %v", err)
-	}
-	log.Println("Successfully connected to MongoDB")
-
-	// Initialize database
-	db := mongoClient.Database(dbName)
-
-	// Create gRPC server
+	// Create gRPC server with configuration
 	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(10*1024*1024), // 10MB
-		grpc.MaxSendMsgSize(10*1024*1024), // 10MB
+		grpc.MaxRecvMsgSize(config.GRPC.MaxRecvMsgSize),
+		grpc.MaxSendMsgSize(config.GRPC.MaxSendMsgSize),
 	)
 
 	// Initialize and register Course Service
@@ -73,14 +77,14 @@ func main() {
 	reflection.Register(grpcServer)
 
 	// Start listening
-	listener, err := net.Listen("tcp", ":"+port)
+	listener, err := net.Listen("tcp", ":"+config.ServicePort)
 	if err != nil {
-		log.Fatalf("Failed to listen on port %s: %v", port, err)
+		log.Fatalf("Failed to listen on port %s: %v", config.ServicePort, err)
 	}
 
 	// Graceful shutdown handling
 	go func() {
-		log.Printf("Course Service is listening on port %s", port)
+		log.Printf("Course Service is listening on port %s", config.ServicePort)
 		if err := grpcServer.Serve(listener); err != nil {
 			log.Fatalf("Failed to serve: %v", err)
 		}
@@ -99,18 +103,5 @@ func main() {
 	// Graceful shutdown
 	grpcServer.GracefulStop()
 
-	// Disconnect from MongoDB
-	if err := mongoClient.Disconnect(context.Background()); err != nil {
-		log.Printf("Error disconnecting from MongoDB: %v", err)
-	}
-
 	log.Println("Course Service stopped")
-}
-
-// getEnv retrieves environment variable or returns default value
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }

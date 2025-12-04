@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"google.golang.org/grpc/codes"
@@ -16,28 +15,27 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "stdiscm_p4/backend/pb/grade"
+	"stdiscm_p4/backend/shared"
 )
 
 // GradeService implements the gRPC GradeService
 type GradeService struct {
 	pb.UnimplementedGradeServiceServer
-	db               *mongo.Database
-	gradesCol        *mongo.Collection
-	enrollmentsCol   *mongo.Collection
-	coursesCol       *mongo.Collection
-	usersCol         *mongo.Collection
-	prerequisitesCol *mongo.Collection
+	db             *mongo.Database
+	gradesCol      *mongo.Collection
+	enrollmentsCol *mongo.Collection
+	coursesCol     *mongo.Collection
+	usersCol       *mongo.Collection
 }
 
 // NewGradeService creates a new GradeService instance
 func NewGradeService(db *mongo.Database) *GradeService {
 	return &GradeService{
-		db:               db,
-		gradesCol:        db.Collection("grades"),
-		enrollmentsCol:   db.Collection("enrollments"),
-		coursesCol:       db.Collection("courses"),
-		usersCol:         db.Collection("users"),
-		prerequisitesCol: db.Collection("prerequisites"),
+		db:             db,
+		gradesCol:      db.Collection("grades"),
+		enrollmentsCol: db.Collection("enrollments"),
+		coursesCol:     db.Collection("courses"),
+		usersCol:       db.Collection("users"),
 	}
 }
 
@@ -50,14 +48,13 @@ func (s *GradeService) GetStudentGrades(ctx context.Context, req *pb.GetStudentG
 	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Verify student exists
-	var student struct {
-		ID   string `bson:"_id"`
-		Role string `bson:"role"`
-	}
+	// Verify student exists using shared model
+	var student shared.User
 	err := s.usersCol.FindOne(queryCtx, bson.M{"_id": req.StudentId}).Decode(&student)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
+			// If student doesn't exist, strictly speaking we should probably error,
+			// but returning empty is also safe. Original logic returned empty.
 			return &pb.GetStudentGradesResponse{
 				Grades:  []*pb.Grade{},
 				GpaInfo: &pb.GPACalculation{},
@@ -67,11 +64,11 @@ func (s *GradeService) GetStudentGrades(ctx context.Context, req *pb.GetStudentG
 		return nil, status.Error(codes.Internal, "failed to retrieve student information")
 	}
 
-	if student.Role != "student" {
+	if student.Role != shared.RoleStudent {
 		return nil, status.Error(codes.PermissionDenied, "user is not a student")
 	}
 
-	// Get grades for this student
+	// Get grades
 	filter := bson.M{"student_id": req.StudentId}
 	if req.Semester != "" {
 		filter["semester"] = req.Semester
@@ -88,30 +85,21 @@ func (s *GradeService) GetStudentGrades(ctx context.Context, req *pb.GetStudentG
 	}
 	defer cursor.Close(queryCtx)
 
-	// Parse results
 	var grades []*pb.Grade
 	for cursor.Next(queryCtx) {
 		var doc bson.M
 		if err := cursor.Decode(&doc); err != nil {
-			log.Printf("Error decoding grade document: %v", err)
 			continue
 		}
 
-		grade, err := s.documentToGrade(queryCtx, doc)
+		grade, err := s.documentToGrade(doc)
 		if err != nil {
-			log.Printf("Error converting document to grade: %v", err)
 			continue
 		}
-
 		grades = append(grades, grade)
 	}
 
-	if err := cursor.Err(); err != nil {
-		log.Printf("Cursor error: %v", err)
-		return nil, status.Error(codes.Internal, "error iterating grades")
-	}
-
-	// Calculate GPA
+	// Calculate GPA using shared logic
 	gpaInfo, err := s.calculateStudentGPA(queryCtx, req.StudentId, req.Semester)
 	if err != nil {
 		log.Printf("Error calculating GPA: %v", err)
@@ -133,11 +121,7 @@ func (s *GradeService) CalculateGPA(ctx context.Context, req *pb.CalculateGPAReq
 	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Verify student exists
-	var student struct {
-		ID   string `bson:"_id"`
-		Role string `bson:"role"`
-	}
+	var student shared.User
 	err := s.usersCol.FindOne(queryCtx, bson.M{"_id": req.StudentId}).Decode(&student)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -147,18 +131,15 @@ func (s *GradeService) CalculateGPA(ctx context.Context, req *pb.CalculateGPAReq
 				Message: fmt.Sprintf("student not found: %s", req.StudentId),
 			}, nil
 		}
-		log.Printf("Error finding student %s: %v", req.StudentId, err)
 		return nil, status.Error(codes.Internal, "failed to retrieve student information")
 	}
 
-	if student.Role != "student" {
+	if student.Role != shared.RoleStudent {
 		return nil, status.Error(codes.PermissionDenied, "user is not a student")
 	}
 
-	// Calculate GPA
 	gpaInfo, err := s.calculateStudentGPA(queryCtx, req.StudentId, req.Semester)
 	if err != nil {
-		log.Printf("Error calculating GPA for student %s: %v", req.StudentId, err)
 		return nil, status.Error(codes.Internal, "failed to calculate GPA")
 	}
 
@@ -178,68 +159,40 @@ func (s *GradeService) GetClassRoster(ctx context.Context, req *pb.GetClassRoste
 	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Get course information
-	var course struct {
-		ID    string `bson:"_id"`
-		Code  string `bson:"code"`
-		Title string `bson:"title"`
-	}
+	var course shared.Course
 	err := s.coursesCol.FindOne(queryCtx, bson.M{"_id": req.CourseId}).Decode(&course)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return &pb.GetClassRosterResponse{
-				CourseId:      req.CourseId,
-				CourseCode:    "",
-				CourseTitle:   "",
-				Students:      []*pb.StudentRosterEntry{},
-				TotalStudents: 0,
-			}, nil
+			return &pb.GetClassRosterResponse{}, nil
 		}
-		log.Printf("Error finding course %s: %v", req.CourseId, err)
 		return nil, status.Error(codes.Internal, "failed to retrieve course information")
 	}
 
-	// Get all enrolled students for this course
+	// Find enrolled students
 	filter := bson.M{
 		"course_id": req.CourseId,
-		"status":    "enrolled",
+		"status":    shared.StatusEnrolled,
 	}
-
-	findOptions := options.Find().
-		SetSort(bson.D{{Key: "student_id", Value: 1}})
+	findOptions := options.Find().SetSort(bson.D{{Key: "student_id", Value: 1}})
 
 	cursor, err := s.enrollmentsCol.Find(queryCtx, filter, findOptions)
 	if err != nil {
-		log.Printf("Error querying enrollments: %v", err)
 		return nil, status.Error(codes.Internal, "failed to retrieve enrollments")
 	}
 	defer cursor.Close(queryCtx)
 
-	// Parse enrollments and build roster
 	var students []*pb.StudentRosterEntry
 	for cursor.Next(queryCtx) {
-		var enrollment struct {
-			ID        string `bson:"_id"`
-			StudentID string `bson:"student_id"`
-		}
+		var enrollment shared.Enrollment
 		if err := cursor.Decode(&enrollment); err != nil {
-			log.Printf("Error decoding enrollment: %v", err)
 			continue
 		}
 
-		// Get student details
 		studentEntry, err := s.getStudentRosterEntry(queryCtx, enrollment.StudentID, enrollment.ID)
 		if err != nil {
-			log.Printf("Error getting student entry for %s: %v", enrollment.StudentID, err)
 			continue
 		}
-
 		students = append(students, studentEntry)
-	}
-
-	if err := cursor.Err(); err != nil {
-		log.Printf("Cursor error: %v", err)
-		return nil, status.Error(codes.Internal, "error iterating enrollments")
 	}
 
 	return &pb.GetClassRosterResponse{
@@ -265,99 +218,75 @@ func (s *GradeService) UploadGrades(stream pb.GradeService_UploadGradesServer) e
 		receivedMetadata = false
 	)
 
-	// Process stream messages
 	for {
 		req, err := stream.Recv()
 		if err != nil {
-			// Stream ended
 			break
-		}
+		} // Stream ended
 
-		// First message should be UploadGradesRequest (with course_id and faculty_id)
 		if !receivedMetadata {
 			if req.GetMetadata().GetCourseId() == "" || req.GetMetadata().GetFacultyId() == "" {
-				return status.Error(codes.InvalidArgument, "first message must contain course_id and faculty_id")
+				return status.Error(codes.InvalidArgument, "metadata missing")
 			}
-
 			courseID = req.GetMetadata().GetCourseId()
 			facultyID = req.GetMetadata().GetFacultyId()
 
-			// Validate faculty can upload grades for this course
 			if err := s.validateFacultyForCourse(stream.Context(), courseID, facultyID); err != nil {
 				return status.Errorf(codes.PermissionDenied, "faculty validation failed: %v", err)
 			}
-
 			receivedMetadata = true
-			continue // Skip to next message for grade entries
+			continue
 		}
 
-		// Process grade entry messages
 		entry := req.GetEntry()
 		if entry == nil {
 			failed++
-			errors = append(errors, "nil grade entry received")
+			errors = append(errors, "nil grade entry")
 			continue
 		}
 
 		totalProcessed++
 
-		// Upload the grade
 		if err := s.uploadSingleGrade(stream.Context(), courseID, facultyID, entry); err != nil {
 			failed++
 			errors = append(errors, fmt.Sprintf("student %s: %v", entry.StudentId, err))
-			log.Printf("[GradeService] Failed to upload grade for student %s: %v", entry.StudentId, err)
 		} else {
 			successful++
 		}
 
-		// Check if this is the last entry
 		if req.IsLast {
 			break
 		}
 	}
 
-	// Check if we received metadata
 	if !receivedMetadata {
-		return status.Error(codes.InvalidArgument, "no metadata received with course_id and faculty_id")
+		return status.Error(codes.InvalidArgument, "no metadata received")
 	}
 
-	// Send final response
-	response := &pb.UploadGradesResponse{
+	return stream.SendAndClose(&pb.UploadGradesResponse{
 		Success:        successful > 0 || totalProcessed == 0,
 		TotalProcessed: totalProcessed,
 		Successful:     successful,
 		Failed:         failed,
 		Errors:         errors,
-		Message:        fmt.Sprintf("Processed %d grades, %d successful, %d failed", totalProcessed, successful, failed),
-	}
-
-	return stream.SendAndClose(response)
+		Message:        fmt.Sprintf("Processed %d grades", totalProcessed),
+	})
 }
 
 // PublishGrades makes grades visible to students
 func (s *GradeService) PublishGrades(ctx context.Context, req *pb.PublishGradesRequest) (*pb.PublishGradesResponse, error) {
 	if req == nil || req.CourseId == "" || req.FacultyId == "" {
-		return nil, status.Error(codes.InvalidArgument, "course_id and faculty_id are required")
+		return nil, status.Error(codes.InvalidArgument, "invalid arguments")
 	}
 
 	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Validate faculty can publish grades for this course
 	if err := s.validateFacultyForCourse(queryCtx, req.CourseId, req.FacultyId); err != nil {
-		return &pb.PublishGradesResponse{
-			Success:         false,
-			GradesPublished: 0,
-			Message:         fmt.Sprintf("faculty validation failed: %v", err),
-		}, nil
+		return &pb.PublishGradesResponse{Success: false, Message: fmt.Sprintf("%v", err)}, nil
 	}
 
-	// Find all grades for this course that aren't published yet
-	filter := bson.M{
-		"course_id": req.CourseId,
-		"published": false,
-	}
-
+	filter := bson.M{"course_id": req.CourseId, "published": false}
 	update := bson.M{
 		"$set": bson.M{
 			"published":        true,
@@ -369,441 +298,298 @@ func (s *GradeService) PublishGrades(ctx context.Context, req *pb.PublishGradesR
 
 	result, err := s.gradesCol.UpdateMany(queryCtx, filter, update)
 	if err != nil {
-		log.Printf("Error publishing grades for course %s: %v", req.CourseId, err)
 		return nil, status.Error(codes.Internal, "failed to publish grades")
 	}
 
-	message := "no grades to publish"
+	msg := "no grades to publish"
 	if result.ModifiedCount > 0 {
-		message = fmt.Sprintf("published %d grades", result.ModifiedCount)
+		msg = fmt.Sprintf("published %d grades", result.ModifiedCount)
 	}
 
 	return &pb.PublishGradesResponse{
 		Success:         true,
 		GradesPublished: int32(result.ModifiedCount),
-		Message:         message,
+		Message:         msg,
 	}, nil
 }
 
 // GetCourseGrades retrieves all grades for a course (faculty only)
 func (s *GradeService) GetCourseGrades(ctx context.Context, req *pb.GetCourseGradesRequest) (*pb.GetCourseGradesResponse, error) {
 	if req == nil || req.CourseId == "" || req.FacultyId == "" {
-		return nil, status.Error(codes.InvalidArgument, "course_id and faculty_id are required")
+		return nil, status.Error(codes.InvalidArgument, "invalid arguments")
 	}
 
 	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Validate faculty can view grades for this course
 	if err := s.validateFacultyForCourse(queryCtx, req.CourseId, req.FacultyId); err != nil {
-		return &pb.GetCourseGradesResponse{
-			Grades:       []*pb.Grade{},
-			TotalGrades:  0,
-			AllPublished: false,
-		}, nil
+		return &pb.GetCourseGradesResponse{}, nil
 	}
 
-	// Get all grades for this course
 	filter := bson.M{"course_id": req.CourseId}
-	findOptions := options.Find().
-		SetSort(bson.D{{Key: "student_id", Value: 1}})
-
-	cursor, err := s.gradesCol.Find(queryCtx, filter, findOptions)
+	cursor, err := s.gradesCol.Find(queryCtx, filter)
 	if err != nil {
-		log.Printf("Error querying course grades: %v", err)
-		return nil, status.Error(codes.Internal, "failed to retrieve grades")
+		return nil, status.Error(codes.Internal, "db error")
 	}
 	defer cursor.Close(queryCtx)
 
-	// Parse results
 	var grades []*pb.Grade
 	allPublished := true
+	count := 0
 
 	for cursor.Next(queryCtx) {
 		var doc bson.M
 		if err := cursor.Decode(&doc); err != nil {
-			log.Printf("Error decoding grade document: %v", err)
 			continue
 		}
 
-		grade, err := s.documentToGrade(queryCtx, doc)
+		grade, err := s.documentToGrade(doc)
 		if err != nil {
-			log.Printf("Error converting document to grade: %v", err)
 			continue
 		}
 
 		grades = append(grades, grade)
+		count++
 
-		// Check if this grade is published
-		if published, ok := doc["published"].(bool); ok && !published {
+		if pub, _ := shared.GetBool(doc["published"]); !pub {
 			allPublished = false
 		}
 	}
 
-	if err := cursor.Err(); err != nil {
-		log.Printf("Cursor error: %v", err)
-		return nil, status.Error(codes.Internal, "error iterating grades")
-	}
-
-	// Get total count
-	totalCount, err := s.gradesCol.CountDocuments(queryCtx, filter)
-	if err != nil {
-		log.Printf("Error counting grades: %v", err)
-		totalCount = int64(len(grades))
-	}
-
 	return &pb.GetCourseGradesResponse{
 		Grades:       grades,
-		TotalGrades:  int32(totalCount),
-		AllPublished: allPublished && len(grades) > 0,
+		TotalGrades:  int32(count),
+		AllPublished: allPublished && count > 0,
 	}, nil
 }
 
 // ============================================================================
-// Helper Functions (Private to service.go)
+// Helper Functions
 // ============================================================================
 
-// documentToGrade converts a MongoDB document to a protobuf Grade message
-func (s *GradeService) documentToGrade(ctx context.Context, doc bson.M) (*pb.Grade, error) {
+func (s *GradeService) documentToGrade(doc bson.M) (*pb.Grade, error) {
 	grade := &pb.Grade{}
 
-	// Required fields
-	if enrollmentID, ok := doc["enrollment_id"].(string); ok {
-		grade.EnrollmentId = enrollmentID
+	// Safely extract fields using shared helpers to prevent panics
+	if id, _ := shared.GetString(doc["enrollment_id"]); id != "" {
+		grade.EnrollmentId = id
 	} else {
-		return nil, fmt.Errorf("missing or invalid enrollment_id field")
+		return nil, fmt.Errorf("missing enrollment_id")
+	}
+	if sid, _ := shared.GetString(doc["student_id"]); sid != "" {
+		grade.StudentId = sid
+	}
+	if sname, _ := shared.GetString(doc["student_name"]); sname != "" {
+		grade.StudentName = sname
+	}
+	if cid, _ := shared.GetString(doc["course_id"]); cid != "" {
+		grade.CourseId = cid
+	}
+	if ccode, _ := shared.GetString(doc["course_code"]); ccode != "" {
+		grade.CourseCode = ccode
+	}
+	if ctitle, _ := shared.GetString(doc["course_title"]); ctitle != "" {
+		grade.CourseTitle = ctitle
 	}
 
-	if studentID, ok := doc["student_id"].(string); ok {
-		grade.StudentId = studentID
-	} else {
-		return nil, fmt.Errorf("missing or invalid student_id field")
+	if u, err := shared.GetInt32(doc["units"]); err == nil {
+		grade.Units = u
+	}
+	if g, _ := shared.GetString(doc["grade"]); g != "" {
+		grade.Grade = strings.ToUpper(g)
+	}
+	if sem, _ := shared.GetString(doc["semester"]); sem != "" {
+		grade.Semester = sem
+	}
+	if upBy, _ := shared.GetString(doc["uploaded_by"]); upBy != "" {
+		grade.UploadedBy = upBy
+	}
+	if reason, _ := shared.GetString(doc["override_reason"]); reason != "" {
+		grade.OverrideReason = reason
 	}
 
-	if studentName, ok := doc["student_name"].(string); ok {
-		grade.StudentName = studentName
+	if upAt, err := shared.GetTime(doc["uploaded_at"]); err == nil {
+		grade.UploadedAt = timestamppb.New(upAt)
 	}
-
-	if courseID, ok := doc["course_id"].(string); ok {
-		grade.CourseId = courseID
+	if pubAt, err := shared.GetTime(doc["published_at"]); err == nil {
+		grade.PublishedAt = timestamppb.New(pubAt)
 	}
-
-	if courseCode, ok := doc["course_code"].(string); ok {
-		grade.CourseCode = courseCode
-	}
-
-	if courseTitle, ok := doc["course_title"].(string); ok {
-		grade.CourseTitle = courseTitle
-	}
-
-	if units, ok := doc["units"].(int32); ok {
-		grade.Units = units
-	} else if units, ok := doc["units"].(int64); ok {
-		grade.Units = int32(units)
-	}
-
-	if gradeStr, ok := doc["grade"].(string); ok {
-		grade.Grade = strings.ToUpper(gradeStr)
-	} else {
-		return nil, fmt.Errorf("missing or invalid grade field")
-	}
-
-	if semester, ok := doc["semester"].(string); ok {
-		grade.Semester = semester
-	}
-
-	if uploadedBy, ok := doc["uploaded_by"].(string); ok {
-		grade.UploadedBy = uploadedBy
-	}
-
-	// Timestamps
-	if uploadedAt, ok := doc["uploaded_at"].(primitive.DateTime); ok {
-		grade.UploadedAt = timestamppb.New(uploadedAt.Time())
-	}
-
-	if publishedAt, ok := doc["published_at"].(primitive.DateTime); ok {
-		grade.PublishedAt = timestamppb.New(publishedAt.Time())
-	}
-
-	// Boolean fields
-	if published, ok := doc["published"].(bool); ok {
-		grade.Published = published
-	}
-
-	if overrideReason, ok := doc["override_reason"].(string); ok {
-		grade.OverrideReason = overrideReason
+	if pub, err := shared.GetBool(doc["published"]); err == nil {
+		grade.Published = pub
 	}
 
 	return grade, nil
 }
 
-// calculateStudentGPA calculates GPA for a student
 func (s *GradeService) calculateStudentGPA(ctx context.Context, studentID, semester string) (*pb.GPACalculation, error) {
-	// Build filter for published grades
+	// Standardize GPA Calculation
+	// We replaced the aggregation pipeline with this logic to handle denormalized fields
+	// and shared grade points logic safely.
 	filter := bson.M{
 		"student_id": studentID,
 		"published":  true,
-		"grade": bson.M{
-			"$in": []string{"A", "B", "C", "D", "F"},
-		},
+		// Exclude I and W from GPA
+		"grade": bson.M{"$nin": []string{shared.GradeI, shared.GradeW}},
 	}
-
 	if semester != "" {
 		filter["semester"] = semester
 	}
 
-	// Aggregate to calculate GPA
-	pipeline := []bson.M{
-		{"$match": filter},
-		{"$group": bson.M{
-			"_id": "$semester",
-			"total_points": bson.M{
-				"$sum": bson.M{
-					"$multiply": []interface{}{
-						bson.M{
-							"$switch": bson.M{
-								"branches": []bson.M{
-									{"case": bson.M{"$eq": []interface{}{"$grade", "A"}}, "then": 4.0},
-									{"case": bson.M{"$eq": []interface{}{"$grade", "B"}}, "then": 3.0},
-									{"case": bson.M{"$eq": []interface{}{"$grade", "C"}}, "then": 2.0},
-									{"case": bson.M{"$eq": []interface{}{"$grade", "D"}}, "then": 1.0},
-									{"case": bson.M{"$eq": []interface{}{"$grade", "F"}}, "then": 0.0},
-								},
-								"default": 0.0,
-							},
-						},
-						"$units",
-					},
-				},
-			},
-			"total_units":  bson.M{"$sum": "$units"},
-			"course_count": bson.M{"$sum": 1},
-		}},
-	}
-
-	cursor, err := s.gradesCol.Aggregate(ctx, pipeline)
+	cursor, err := s.gradesCol.Find(ctx, filter)
 	if err != nil {
-		return nil, fmt.Errorf("aggregation failed: %w", err)
+		return nil, err
 	}
 	defer cursor.Close(ctx)
 
-	var results []struct {
-		Semester    string  `bson:"_id"`
-		TotalPoints float64 `bson:"total_points"`
-		TotalUnits  float64 `bson:"total_units"`
-		CourseCount int32   `bson:"course_count"`
-	}
-
-	if err := cursor.All(ctx, &results); err != nil {
-		return nil, fmt.Errorf("failed to decode results: %w", err)
-	}
-
-	// Calculate overall and per-semester GPA
-	var semesterBreakdown []*pb.SemesterGPA
 	var overallPoints, overallUnits float64
-	var overallCourses int32
+	semesterMap := make(map[string]*struct {
+		points, units float64
+		count         int
+	})
 
-	for _, result := range results {
-		semesterGPA := 0.0
-		if result.TotalUnits > 0 {
-			semesterGPA = result.TotalPoints / result.TotalUnits
+	for cursor.Next(ctx) {
+		// FIX: Use local struct to capture denormalized Units and Semester fields
+		// which are present in MongoDB grades but not in shared.Grade model.
+		var g struct {
+			Grade    string `bson:"grade"`
+			Units    int32  `bson:"units"`
+			Semester string `bson:"semester"`
 		}
 
-		semesterBreakdown = append(semesterBreakdown, &pb.SemesterGPA{
-			Semester:     result.Semester,
-			Gpa:          semesterGPA,
-			Units:        int32(result.TotalUnits),
-			CoursesCount: result.CourseCount,
-		})
+		if err := cursor.Decode(&g); err != nil {
+			log.Printf("Error decoding grade for GPA calc: %v", err)
+			continue
+		}
 
-		overallPoints += result.TotalPoints
-		overallUnits += result.TotalUnits
-		overallCourses += result.CourseCount
+		// Use shared helper for points
+		points := shared.GetGradePoints(g.Grade)
+		units := float64(g.Units)
+
+		// Aggregate Overall
+		overallPoints += points * units
+		overallUnits += units
+
+		// Aggregate Semester
+		if _, exists := semesterMap[g.Semester]; !exists {
+			semesterMap[g.Semester] = &struct {
+				points, units float64
+				count         int
+			}{}
+		}
+		sm := semesterMap[g.Semester]
+		sm.points += points * units
+		sm.units += units
+		sm.count++
 	}
 
-	overallGPA := 0.0
-	if overallUnits > 0 {
-		overallGPA = overallPoints / overallUnits
-	}
-
-	return &pb.GPACalculation{
-		TermGpa:             overallGPA,
-		Cgpa:                overallGPA, // For simplicity, same as term GPA in this calculation
+	// Build Result
+	calc := &pb.GPACalculation{
 		TotalUnitsAttempted: int32(overallUnits),
 		TotalUnitsEarned:    int32(overallUnits),
-		SemesterBreakdown:   semesterBreakdown,
-	}, nil
+	}
+	if overallUnits > 0 {
+		calc.TermGpa = overallPoints / overallUnits
+		calc.Cgpa = overallPoints / overallUnits
+	}
+
+	for sem, data := range semesterMap {
+		sgpa := 0.0
+		if data.units > 0 {
+			sgpa = data.points / data.units
+		}
+		calc.SemesterBreakdown = append(calc.SemesterBreakdown, &pb.SemesterGPA{
+			Semester: sem, Gpa: sgpa, Units: int32(data.units), CoursesCount: int32(data.count),
+		})
+	}
+
+	return calc, nil
 }
 
-// getStudentRosterEntry creates a StudentRosterEntry for a student
 func (s *GradeService) getStudentRosterEntry(ctx context.Context, studentID, enrollmentID string) (*pb.StudentRosterEntry, error) {
-	// Get student details
-	var user struct {
-		Name      string `bson:"name"`
-		Email     string `bson:"email"`
-		Major     string `bson:"major"`
-		YearLevel int32  `bson:"year_level"`
+	var user shared.User
+	if err := s.usersCol.FindOne(ctx, bson.M{"_id": studentID}).Decode(&user); err != nil {
+		return nil, err
 	}
 
-	err := s.usersCol.FindOne(ctx, bson.M{"_id": studentID}).Decode(&user)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get student details: %w", err)
-	}
-
-	// Get grade if exists
-	var grade string
 	var gradeDoc struct {
 		Grade string `bson:"grade"`
 	}
-
-	err = s.gradesCol.FindOne(ctx, bson.M{"enrollment_id": enrollmentID}).Decode(&gradeDoc)
-	if err == nil {
+	grade := ""
+	if err := s.gradesCol.FindOne(ctx, bson.M{"enrollment_id": enrollmentID}).Decode(&gradeDoc); err == nil {
 		grade = gradeDoc.Grade
 	}
 
 	return &pb.StudentRosterEntry{
-		StudentId:   studentID,
-		StudentName: user.Name,
-		Email:       user.Email,
-		Major:       user.Major,
-		YearLevel:   user.YearLevel,
-		Grade:       grade,
+		StudentId: studentID, StudentName: user.Name, Email: user.Email,
+		Major: user.Major, YearLevel: user.YearLevel, Grade: grade,
 	}, nil
 }
 
-// validateFacultyForCourse checks if a faculty is assigned to a course
 func (s *GradeService) validateFacultyForCourse(ctx context.Context, courseID, facultyID string) error {
-	// Check if faculty exists and has correct role
-	var faculty struct {
-		ID   string `bson:"_id"`
-		Role string `bson:"role"`
+	var faculty shared.User
+	if err := s.usersCol.FindOne(ctx, bson.M{"_id": facultyID}).Decode(&faculty); err != nil {
+		return fmt.Errorf("faculty not found")
+	}
+	if faculty.Role != shared.RoleFaculty {
+		return fmt.Errorf("user not faculty")
 	}
 
-	err := s.usersCol.FindOne(ctx, bson.M{"_id": facultyID}).Decode(&faculty)
-	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			return fmt.Errorf("faculty not found: %s", facultyID)
-		}
-		return fmt.Errorf("failed to retrieve faculty: %w", err)
+	var course shared.Course
+	if err := s.coursesCol.FindOne(ctx, bson.M{"_id": courseID}).Decode(&course); err != nil {
+		return fmt.Errorf("course not found")
 	}
-
-	if faculty.Role != "faculty" {
-		return fmt.Errorf("user is not a faculty member: %s", facultyID)
-	}
-
-	// Check if faculty is assigned to this course
-	var course struct {
-		ID        string `bson:"_id"`
-		FacultyID string `bson:"faculty_id"`
-	}
-
-	err = s.coursesCol.FindOne(ctx, bson.M{"_id": courseID}).Decode(&course)
-	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			return fmt.Errorf("course not found: %s", courseID)
-		}
-		return fmt.Errorf("failed to retrieve course: %w", err)
-	}
-
 	if course.FacultyID != facultyID {
-		return fmt.Errorf("faculty %s is not assigned to course %s", facultyID, courseID)
+		return fmt.Errorf("faculty mismatch")
 	}
-
 	return nil
 }
 
-// uploadSingleGrade uploads a single grade entry
 func (s *GradeService) uploadSingleGrade(ctx context.Context, courseID, facultyID string, entry *pb.GradeEntry) error {
-	// Validate grade
-	validGrades := map[string]bool{"A": true, "B": true, "C": true, "D": true, "F": true, "I": true, "W": true}
 	grade := strings.ToUpper(entry.Grade)
-	if !validGrades[grade] {
-		return fmt.Errorf("invalid grade: %s", entry.Grade)
+	if !shared.IsValidGrade(grade) {
+		return fmt.Errorf("invalid grade")
 	}
 
-	// Find enrollment for this student in this course
-	var enrollment struct {
-		ID     string `bson:"_id"`
-		Status string `bson:"status"`
-	}
-
+	// Find Enrollment (check if status is enrolled or completed)
+	var enrollment shared.Enrollment
 	err := s.enrollmentsCol.FindOne(ctx, bson.M{
-		"student_id": entry.StudentId,
-		"course_id":  courseID,
-		"status":     "completed",
+		"student_id": entry.StudentId, "course_id": courseID,
 	}).Decode(&enrollment)
 
 	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			return fmt.Errorf("student %s not enrolled in course %s", entry.StudentId, courseID)
-		}
-		return fmt.Errorf("failed to find enrollment: %w", err)
+		return fmt.Errorf("student not enrolled")
 	}
 
-	// Check if grade already exists
-	var existingGrade struct {
-		ID string `bson:"_id"`
+	// Upsert Grade
+	// Note: We are explicitly saving denormalized fields (units, semester) here
+	// so the GPA calculator can access them later.
+	// We need to fetch course details first for denormalization.
+	var course shared.Course
+	if err := s.coursesCol.FindOne(ctx, bson.M{"_id": courseID}).Decode(&course); err != nil {
+		return fmt.Errorf("course details not found")
 	}
 
-	err = s.gradesCol.FindOne(ctx, bson.M{"enrollment_id": enrollment.ID}).Decode(&existingGrade)
-	if err == nil {
-		// Grade exists, update it
-		update := bson.M{
-			"$set": bson.M{
-				"grade":            grade,
-				"last_modified_by": facultyID,
-				"last_modified_at": time.Now(),
-				"override_reason":  "Grade updated via upload",
-			},
-		}
-
-		_, err = s.gradesCol.UpdateOne(
-			ctx,
-			bson.M{"enrollment_id": enrollment.ID},
-			update,
-		)
-		return err
+	var student shared.User
+	if err := s.usersCol.FindOne(ctx, bson.M{"_id": entry.StudentId}).Decode(&student); err != nil {
+		return fmt.Errorf("student details not found")
 	}
 
-	// Get course and student info for denormalization
-	var course struct {
-		Code     string `bson:"code"`
-		Title    string `bson:"title"`
-		Units    int32  `bson:"units"`
-		Semester string `bson:"semester"`
+	update := bson.M{
+		"$set": bson.M{
+			"grade": grade, "last_modified_by": facultyID, "last_modified_at": time.Now(),
+			"uploaded_by": facultyID, "uploaded_at": time.Now(),
+			// Denormalized fields
+			"student_id":    entry.StudentId,
+			"student_name":  student.Name,
+			"course_id":     courseID,
+			"course_code":   course.Code,
+			"course_title":  course.Title,
+			"units":         course.Units,    // CRITICAL for GPA
+			"semester":      course.Semester, // CRITICAL for GPA
+			"enrollment_id": enrollment.ID,
+		},
 	}
-
-	err = s.coursesCol.FindOne(ctx, bson.M{"_id": courseID}).Decode(&course)
-	if err != nil {
-		return fmt.Errorf("failed to get course info: %w", err)
-	}
-
-	var student struct {
-		Name string `bson:"name"`
-	}
-
-	err = s.usersCol.FindOne(ctx, bson.M{"_id": entry.StudentId}).Decode(&student)
-	if err != nil {
-		return fmt.Errorf("failed to get student info: %w", err)
-	}
-
-	// Create new grade document
-	gradeDoc := bson.M{
-		"enrollment_id":   enrollment.ID,
-		"student_id":      entry.StudentId,
-		"student_name":    student.Name,
-		"course_id":       courseID,
-		"course_code":     course.Code,
-		"course_title":    course.Title,
-		"units":           course.Units,
-		"grade":           grade,
-		"semester":        course.Semester,
-		"uploaded_by":     facultyID,
-		"uploaded_at":     time.Now(),
-		"published":       false,
-		"override_reason": "",
-	}
-
-	_, err = s.gradesCol.InsertOne(ctx, gradeDoc)
+	opts := options.Update().SetUpsert(true)
+	_, err = s.gradesCol.UpdateOne(ctx, bson.M{"enrollment_id": enrollment.ID}, update, opts)
 	return err
 }

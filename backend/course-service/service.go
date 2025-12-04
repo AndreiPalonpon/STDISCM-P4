@@ -10,12 +10,12 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "stdiscm_p4/backend/pb/course"
+	"stdiscm_p4/backend/shared"
 )
 
 // CourseService implements the gRPC CourseService
@@ -82,10 +82,8 @@ func (s *CourseService) ListCourses(ctx context.Context, req *pb.ListCoursesRequ
 		}
 	}
 
-	// Set query options
-	findOptions := options.Find().
-		SetSort(bson.D{{Key: "code", Value: 1}}).
-		SetLimit(100) // Reasonable limit to prevent huge responses
+	// Set query options using shared helper
+	findOptions := shared.BuildFindOptions(100, "code", 1)
 
 	// Execute query with timeout
 	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -121,8 +119,8 @@ func (s *CourseService) ListCourses(ctx context.Context, req *pb.ListCoursesRequ
 		return nil, status.Error(codes.Internal, "error iterating courses")
 	}
 
-	// Get total count
-	totalCount, err := s.coursesCol.CountDocuments(queryCtx, filter)
+	// Get total count using shared helper
+	totalCount, err := shared.CountDocumentsWithTimeout(ctx, s.coursesCol, filter, 5*time.Second)
 	if err != nil {
 		log.Printf("Error counting courses: %v", err)
 		totalCount = int64(len(courses))
@@ -140,11 +138,9 @@ func (s *CourseService) GetCourse(ctx context.Context, req *pb.GetCourseRequest)
 		return nil, status.Error(codes.InvalidArgument, "course_id is required")
 	}
 
-	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
 	var doc bson.M
-	err := s.coursesCol.FindOne(queryCtx, bson.M{"_id": req.CourseId}).Decode(&doc)
+	err := shared.FindOneWithTimeout(ctx, s.coursesCol, bson.M{"_id": req.CourseId}, &doc, 5*time.Second)
+
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return &pb.GetCourseResponse{
@@ -157,7 +153,7 @@ func (s *CourseService) GetCourse(ctx context.Context, req *pb.GetCourseRequest)
 		return nil, status.Error(codes.Internal, "failed to retrieve course")
 	}
 
-	course, err := s.documentToCourse(queryCtx, doc)
+	course, err := s.documentToCourse(ctx, doc)
 	if err != nil {
 		log.Printf("Error converting document to course: %v", err)
 		return nil, status.Error(codes.Internal, "failed to parse course data")
@@ -189,9 +185,7 @@ func (s *CourseService) CheckPrerequisites(ctx context.Context, req *pb.CheckPre
 
 	var prerequisiteIDs []string
 	for cursor.Next(queryCtx) {
-		var prereq struct {
-			PrereqID string `bson:"prereq_id"`
-		}
+		var prereq shared.Prerequisite
 		if err := cursor.Decode(&prereq); err != nil {
 			log.Printf("Error decoding prerequisite: %v", err)
 			continue
@@ -213,9 +207,9 @@ func (s *CourseService) CheckPrerequisites(ctx context.Context, req *pb.CheckPre
 	allMet := true
 
 	for _, prereqID := range prerequisiteIDs {
-		status := s.checkSinglePrerequisite(queryCtx, req.StudentId, prereqID)
-		prerequisiteStatuses = append(prerequisiteStatuses, status)
-		if !status.Met {
+		prereqStatus := s.checkSinglePrerequisite(queryCtx, req.StudentId, prereqID)
+		prerequisiteStatuses = append(prerequisiteStatuses, prereqStatus)
+		if !prereqStatus.Met {
 			allMet = false
 		}
 	}
@@ -238,17 +232,9 @@ func (s *CourseService) GetCourseAvailability(ctx context.Context, req *pb.GetCo
 		return nil, status.Error(codes.InvalidArgument, "course_id is required")
 	}
 
-	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
+	var course shared.Course
+	err := shared.FindOneWithTimeout(ctx, s.coursesCol, bson.M{"_id": req.CourseId}, &course, 5*time.Second)
 
-	var course struct {
-		ID       string `bson:"_id"`
-		Capacity int32  `bson:"capacity"`
-		Enrolled int32  `bson:"enrolled"`
-		IsOpen   bool   `bson:"is_open"`
-	}
-
-	err := s.coursesCol.FindOne(queryCtx, bson.M{"_id": req.CourseId}).Decode(&course)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return &pb.GetCourseAvailabilityResponse{
@@ -264,12 +250,8 @@ func (s *CourseService) GetCourseAvailability(ctx context.Context, req *pb.GetCo
 		return nil, status.Error(codes.Internal, "failed to check availability")
 	}
 
-	seatsRemaining := course.Capacity - course.Enrolled
-	if seatsRemaining < 0 {
-		seatsRemaining = 0
-	}
-
-	available := course.IsOpen && seatsRemaining > 0
+	seatsRemaining := course.GetSeatsAvailable()
+	available := course.IsAvailable()
 
 	message := "course available"
 	if !course.IsOpen {
@@ -296,77 +278,71 @@ func (s *CourseService) GetCourseAvailability(ctx context.Context, req *pb.GetCo
 func (s *CourseService) documentToCourse(ctx context.Context, doc bson.M) (*pb.Course, error) {
 	course := &pb.Course{}
 
-	// Required fields
-	if id, ok := doc["_id"].(string); ok {
-		course.Id = id
-	} else {
+	// Required fields using shared helpers
+	id, err := shared.GetString(doc["_id"])
+	if err != nil {
 		return nil, fmt.Errorf("missing or invalid _id field")
 	}
+	course.Id = id
 
-	if code, ok := doc["code"].(string); ok {
-		course.Code = code
-	} else {
+	code, err := shared.GetString(doc["code"])
+	if err != nil {
 		return nil, fmt.Errorf("missing or invalid code field")
 	}
+	course.Code = code
 
-	if title, ok := doc["title"].(string); ok {
-		course.Title = title
-	} else {
+	title, err := shared.GetString(doc["title"])
+	if err != nil {
 		return nil, fmt.Errorf("missing or invalid title field")
 	}
+	course.Title = title
 
-	// Optional fields with safe type assertions
-	if description, ok := doc["description"].(string); ok {
+	// Optional fields with safe type assertions using shared helpers
+	if description, err := shared.GetString(doc["description"]); err == nil {
 		course.Description = description
 	}
 
-	if units, ok := doc["units"].(int32); ok {
+	if units, err := shared.GetInt32(doc["units"]); err == nil {
 		course.Units = units
-	} else if units, ok := doc["units"].(int64); ok {
-		course.Units = int32(units)
 	}
 
-	if schedule, ok := doc["schedule"].(string); ok {
+	if schedule, err := shared.GetString(doc["schedule"]); err == nil {
 		course.Schedule = schedule
 	}
 
-	if room, ok := doc["room"].(string); ok {
+	if room, err := shared.GetString(doc["room"]); err == nil {
 		course.Room = room
 	}
 
-	if capacity, ok := doc["capacity"].(int32); ok {
+	if capacity, err := shared.GetInt32(doc["capacity"]); err == nil {
 		course.Capacity = capacity
-	} else if capacity, ok := doc["capacity"].(int64); ok {
-		course.Capacity = int32(capacity)
 	}
 
-	if enrolled, ok := doc["enrolled"].(int32); ok {
+	if enrolled, err := shared.GetInt32(doc["enrolled"]); err == nil {
 		course.Enrolled = enrolled
-	} else if enrolled, ok := doc["enrolled"].(int64); ok {
-		course.Enrolled = int32(enrolled)
 	}
 
-	if facultyID, ok := doc["faculty_id"].(string); ok {
+	if facultyID, err := shared.GetString(doc["faculty_id"]); err == nil {
 		course.FacultyId = facultyID
 		// Get faculty name (optional)
 		course.FacultyName = s.getFacultyName(ctx, facultyID)
 	}
 
-	if isOpen, ok := doc["is_open"].(bool); ok {
+	if isOpen, err := shared.GetBool(doc["is_open"]); err == nil {
 		course.IsOpen = isOpen
 	}
 
-	if semester, ok := doc["semester"].(string); ok {
+	if semester, err := shared.GetString(doc["semester"]); err == nil {
 		course.Semester = semester
 	}
 
-	// Timestamps
-	if createdAt, ok := doc["created_at"].(primitive.DateTime); ok {
-		course.CreatedAt = timestamppb.New(createdAt.Time())
+	// Timestamps using shared helper
+	if createdAt, err := shared.GetTime(doc["created_at"]); err == nil {
+		course.CreatedAt = timestamppb.New(createdAt)
 	}
 
-	if updatedAt, ok := doc["updated_at"].(primitive.DateTime); ok {
-		course.UpdatedAt = timestamppb.New(updatedAt.Time())
+	if updatedAt, err := shared.GetTime(doc["updated_at"]); err == nil {
+		course.UpdatedAt = timestamppb.New(updatedAt)
 	}
 
 	// Get prerequisites
@@ -377,9 +353,7 @@ func (s *CourseService) documentToCourse(ctx context.Context, doc bson.M) (*pb.C
 
 // getFacultyName retrieves faculty name from users collection
 func (s *CourseService) getFacultyName(ctx context.Context, facultyID string) string {
-	var user struct {
-		Name string `bson:"name"`
-	}
+	var user shared.User
 
 	queryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -407,9 +381,7 @@ func (s *CourseService) getCoursePrerequisites(ctx context.Context, courseID str
 
 	var prerequisites []string
 	for cursor.Next(queryCtx) {
-		var prereq struct {
-			PrereqID string `bson:"prereq_id"`
-		}
+		var prereq shared.Prerequisite
 		if err := cursor.Decode(&prereq); err != nil {
 			continue
 		}
@@ -421,46 +393,36 @@ func (s *CourseService) getCoursePrerequisites(ctx context.Context, courseID str
 
 // checkSinglePrerequisite checks if student has completed a specific prerequisite
 func (s *CourseService) checkSinglePrerequisite(ctx context.Context, studentID, prereqCourseID string) *pb.PrerequisiteStatus {
-	status := &pb.PrerequisiteStatus{
+	prereqStatus := &pb.PrerequisiteStatus{
 		CourseId: prereqCourseID,
 		Met:      false,
 		Grade:    "",
 	}
 
 	// Get course code for display
-	var course struct {
-		Code string `bson:"code"`
-	}
+	var course shared.Course
 	if err := s.coursesCol.FindOne(ctx, bson.M{"_id": prereqCourseID}).Decode(&course); err == nil {
-		status.CourseCode = course.Code
+		prereqStatus.CourseCode = course.Code
 	}
 
 	// Find enrollment for this student and prerequisite course
-	var enrollment struct {
-		ID     string `bson:"_id"`
-		Status string `bson:"status"`
-	}
-
+	var enrollment shared.Enrollment
 	err := s.enrollmentsCol.FindOne(ctx, bson.M{
 		"student_id": studentID,
 		"course_id":  prereqCourseID,
-		"status":     "completed",
+		"status":     shared.StatusCompleted,
 	}).Decode(&enrollment)
 
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return status // Not completed
+			return prereqStatus // Not completed
 		}
 		log.Printf("Error checking enrollment for prerequisite: %v", err)
-		return status
+		return prereqStatus
 	}
 
 	// Check grade
-	var grade struct {
-		Grade     string `bson:"grade"`
-		Published bool   `bson:"published"`
-	}
-
+	var grade shared.Grade
 	err = s.gradesCol.FindOne(ctx, bson.M{
 		"enrollment_id": enrollment.ID,
 		"published":     true,
@@ -468,18 +430,18 @@ func (s *CourseService) checkSinglePrerequisite(ctx context.Context, studentID, 
 
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return status // Grade not published yet
+			return prereqStatus // Grade not published yet
 		}
 		log.Printf("Error checking grade for prerequisite: %v", err)
-		return status
+		return prereqStatus
 	}
 
-	status.Grade = grade.Grade
+	prereqStatus.Grade = grade.Grade
 
-	// Check if grade is passing (not F)
-	if grade.Grade != "F" && grade.Grade != "W" {
-		status.Met = true
+	// Check if grade is passing using shared helper
+	if shared.IsPassingGrade(grade.Grade) {
+		prereqStatus.Met = true
 	}
 
-	return status
+	return prereqStatus
 }
