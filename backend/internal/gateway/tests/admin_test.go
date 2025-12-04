@@ -49,14 +49,14 @@ func TestGateway_Admin(t *testing.T) {
 	// --- Test 2: Create Course (POST /api/admin/courses) ---
 	t.Run("Create Course", func(t *testing.T) {
 		body := map[string]interface{}{
-			"code":       "GATEWAY-101",
-			"title":      "Gateway Testing",
-			"units":      3,
-			"semester":   "TestSem",
-			"capacity":   30,
-			"schedule":   "MWF 10:00-11:00",
-			"room":       "VIRTUAL",
-			"faculty_id": "FAC-001", // Dummy
+			"code":     "GATEWAY-101",
+			"title":    "Gateway Testing",
+			"units":    3,
+			"semester": "TestSem",
+			"capacity": 30,
+			"schedule": "MWF 10:00-11:00",
+			"room":     "VIRTUAL",
+			// FIX: Removed invalid faculty_id "FAC-001" which caused service failure
 		}
 		jsonBody, _ := json.Marshal(body)
 		req, _ := http.NewRequest("POST", "/api/admin/courses", bytes.NewBuffer(jsonBody))

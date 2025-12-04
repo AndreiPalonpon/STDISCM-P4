@@ -98,9 +98,13 @@ func TestGateway_Enrollment(t *testing.T) {
 		var resp map[string]interface{}
 		json.Unmarshal(rrGet.Body.Bytes(), &resp)
 		cart := resp["cart"].(map[string]interface{})
-		items := cart["items"].([]interface{})
-		if len(items) != 0 {
-			t.Error("Cart should be empty after remove")
+
+		// FIX: Safely check for items, avoiding panic if nil
+		if itemsInterface := cart["items"]; itemsInterface != nil {
+			items := itemsInterface.([]interface{})
+			if len(items) != 0 {
+				t.Error("Cart should be empty after remove")
+			}
 		}
 	})
 

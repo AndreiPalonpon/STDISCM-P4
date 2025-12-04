@@ -37,9 +37,21 @@ func TestGateway_Grade(t *testing.T) {
 	facultyToken := lfResp.Token
 
 	// 3. Create and Assign Course
-	cResp, _ := env.AdminClient.CreateCourse(ctx, &pb_admin.CreateCourseRequest{
-		Code: "GRADE-101", Title: "Grading Systems", Units: 3, Semester: "Sem1", Capacity: 50, FacultyId: "FAC002",
+	cResp, err := env.AdminClient.CreateCourse(ctx, &pb_admin.CreateCourseRequest{
+		Code:      "GRADE-101",
+		Title:     "Grading Systems",
+		Units:     3,
+		Semester:  "Sem1",
+		Capacity:  50,
+		Schedule:  "MWF 9:00-10:00",
+		FacultyId: fResp.UserId, // FIX: Use the actual User ID (UUID/ObjectId) returned by CreateUser
 	})
+	if err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	if !cResp.Success {
+		t.Fatalf("Setup CreateCourse failed: %s", cResp.Message)
+	}
 	courseID := cResp.CourseId
 
 	// --- Test 1: Get Grades (Student) (GET /api/grades) ---

@@ -18,10 +18,19 @@ func TestGateway_Course(t *testing.T) {
 	// Setup: Create a course via Admin Service directly
 	// Note: Removed IsOpen: true because it is not in CreateCourseRequest
 	cResp, err := env.AdminClient.CreateCourse(ctx, &pb_admin.CreateCourseRequest{
-		Code: "REST-101", Title: "Rest API Testing", Units: 3, Semester: "TestSem",
+		Code:     "REST-101",
+		Title:    "Rest API Testing",
+		Units:    3,
+		Semester: "TestSem",
+		Capacity: 50,                // FIX: Added capacity (Required: 5-100)
+		Schedule: "MWF 10:00-11:00", // Added schedule for completeness
 	})
 	if err != nil {
 		t.Fatalf("Setup failed: %v", err)
+	}
+	// FIX: Explicitly check success to catch validation errors (like invalid capacity)
+	if !cResp.Success {
+		t.Fatalf("Setup CreateCourse failed: %s", cResp.Message)
 	}
 	testCourseID := cResp.CourseId
 
