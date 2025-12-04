@@ -69,6 +69,7 @@ func (h *GradeHandler) GetStudentGrades(w http.ResponseWriter, r *http.Request) 
 
 	// 5. Map and Respond
 	response := map[string]interface{}{
+		"success":  true,
 		"grades":   grpcResp.Grades,
 		"gpa_info": grpcResp.GpaInfo,
 	}
@@ -150,6 +151,7 @@ func (h *GradeHandler) GetClassRoster(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Map and Respond
 	response := map[string]interface{}{
+		"success":        true,
 		"course_id":      grpcResp.CourseId,
 		"course_code":    grpcResp.CourseCode,
 		"course_title":   grpcResp.CourseTitle,
@@ -178,9 +180,10 @@ func (h *GradeHandler) GetCourseGrades(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Prepare gRPC Request
+	// FIX: Use user.Id (System ID) instead of user.FacultyId (Business ID) for DB lookups
 	grpcReq := &pb_grade.GetCourseGradesRequest{
 		CourseId:  courseID,
-		FacultyId: user.FacultyId,
+		FacultyId: user.Id,
 	}
 
 	// 4. Call gRPC Service
@@ -195,6 +198,7 @@ func (h *GradeHandler) GetCourseGrades(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Map and Respond
 	response := map[string]interface{}{
+		"success":       true,
 		"grades":        grpcResp.Grades,
 		"total_grades":  grpcResp.TotalGrades,
 		"all_published": grpcResp.AllPublished,
@@ -242,12 +246,13 @@ func (h *GradeHandler) UploadGrades(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. Send Metadata (First Message)
-	// We use the oneof Payload field to send Metadata first, as defined in grade.pb.go
+	// We use the oneof Payload field to send Metadata first
+	// FIX: Use user.Id (System ID) so the service can validate against the DB _id
 	metaReq := &pb_grade.UploadGradeEntryRequest{
 		Payload: &pb_grade.UploadGradeEntryRequest_Metadata{
 			Metadata: &pb_grade.UploadMetadata{
 				CourseId:  courseID,
-				FacultyId: user.FacultyId,
+				FacultyId: user.Id,
 			},
 		},
 		IsLast: false,
@@ -316,9 +321,10 @@ func (h *GradeHandler) PublishGrades(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Prepare gRPC Request
+	// FIX: Use user.Id (System ID) for validation
 	grpcReq := &pb_grade.PublishGradesRequest{
 		CourseId:  courseID,
-		FacultyId: user.FacultyId,
+		FacultyId: user.Id,
 	}
 
 	// 4. Call gRPC Service
@@ -328,6 +334,12 @@ func (h *GradeHandler) PublishGrades(w http.ResponseWriter, r *http.Request) {
 	grpcResp, err := h.GradeClient.PublishGrades(ctx, grpcReq)
 	if err != nil {
 		util.HandleGRPCError(w, err)
+		return
+	}
+
+	// FIX: Check for business logic failure (e.g. faculty validation failed inside service)
+	if !grpcResp.Success {
+		util.WriteJSONError(w, http.StatusBadRequest, grpcResp.Message)
 		return
 	}
 

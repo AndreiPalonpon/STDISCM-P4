@@ -294,7 +294,9 @@ func (h *EnrollmentHandler) GetStudentEnrollments(w http.ResponseWriter, r *http
 		return
 	}
 
+	// FIX: Added "success": true
 	response := map[string]interface{}{
+		"success":     true,
 		"enrollments": grpcResp.Enrollments,
 		"total_units": grpcResp.TotalUnits,
 	}

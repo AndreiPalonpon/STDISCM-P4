@@ -217,14 +217,14 @@ func (h *AuthHandler) ValidateToken(w http.ResponseWriter, r *http.Request) {
 
 // ChangePassword handles POST /auth/change-password
 func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
-	// 1. Authentication: Need to validate the user's token and get their ID
-	validateResp, authErr := h.authenticateRequest(r)
-	if authErr != nil {
-		// authenticateRequest handles writing the error response
+	// 1. Authentication: Retrieve User from Context (AuthMiddleware)
+	// FIX: Use context injected by middleware instead of manual validation which caused panic
+	user, ok := r.Context().Value("user").(*pb.User)
+	if !ok || user == nil {
+		util.WriteJSONError(w, http.StatusUnauthorized, "Unauthorized: User context missing")
 		return
 	}
-
-	userID := validateResp.User.Id
+	userID := user.Id
 
 	// 2. Decode Request Body
 	var reqBody RESTChangePasswordRequest
@@ -275,36 +275,4 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"message": grpcResp.Message,
 	})
-}
-
-// authenticateRequest is a gateway-level helper to validate the token in the request.
-// This implements step 2 of the communication flow: "Gateway → AuthService.ValidateToken(token) → verify JWT"
-func (h *AuthHandler) authenticateRequest(r *http.Request) (*pb.ValidateTokenResponse, error) {
-	w := r.Context().Value("writer").(http.ResponseWriter) // Assuming context passing the ResponseWriter for error utility
-
-	token, err := extractToken(r)
-	if err != nil {
-		util.WriteJSONError(w, http.StatusUnauthorized, "Missing or invalid authorization token")
-		return nil, err
-	}
-
-	grpcReq := &pb.ValidateTokenRequest{Token: token}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	validateResp, err := h.AuthClient.ValidateToken(ctx, grpcReq)
-	if err != nil {
-		handleGRPCError(w, err)
-		return nil, err
-	}
-
-	if !validateResp.Valid {
-		util.WriteJSONError(w, http.StatusUnauthorized, "Invalid or expired session token")
-		return nil, errors.New(validateResp.Message)
-	}
-
-	// Store the User data in the request context for subsequent handlers to use (e.g., getting the student_id)
-	*r = *r.WithContext(context.WithValue(r.Context(), "user", validateResp.User))
-
-	return validateResp, nil
 }

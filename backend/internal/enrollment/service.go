@@ -157,7 +157,8 @@ func (s *EnrollmentService) GetCart(ctx context.Context, req *pb.GetCartRequest)
 	}
 
 	// Hydrate Cart Items using Course Service
-	var cartItems []*pb.CartItem
+	// FIX: Initialize as empty slice to avoid null in JSON
+	cartItems := []*pb.CartItem{}
 	var totalUnits int32
 	var courseIDs []string
 
@@ -192,8 +193,6 @@ func (s *EnrollmentService) GetCart(ctx context.Context, req *pb.GetCartRequest)
 	// Check Conflicts locally
 	conflicts := s.checkScheduleConflictsInternal(cartItems)
 	hasConflicts := len(conflicts) > 0
-
-	// FIX: Removed unused prereqResp variable block
 
 	// Check missing prereqs for ALL items in cart
 	var missingPrereqs []string

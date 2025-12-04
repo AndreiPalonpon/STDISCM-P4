@@ -56,7 +56,9 @@ func (h *CourseHandler) ListCourses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. Map and Respond
+	// FIX: Added "success": true to prevent utility wrapper from nesting data
 	response := map[string]interface{}{
+		"success":     true,
 		"courses":     grpcResp.Courses,
 		"total_count": grpcResp.TotalCount,
 	}
@@ -127,7 +129,9 @@ func (h *CourseHandler) GetCourseAvailability(w http.ResponseWriter, r *http.Req
 	}
 
 	// Map gRPC response to REST format
+	// FIX: Added "success": true
 	response := map[string]interface{}{
+		"success":         true,
 		"available":       grpcResp.Available,
 		"capacity":        grpcResp.Capacity,
 		"enrolled":        grpcResp.Enrolled,
@@ -168,7 +172,9 @@ func (h *CourseHandler) CheckPrerequisites(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// FIX: Added "success": true
 	response := map[string]interface{}{
+		"success":       true,
 		"all_met":       grpcResp.AllMet,
 		"prerequisites": grpcResp.Prerequisites,
 	}

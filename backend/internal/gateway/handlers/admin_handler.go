@@ -115,8 +115,10 @@ func (h *AdminHandler) GetSystemStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// FIX: Added "success": true to prevent utility wrapper from nesting "stats" under "data"
 	util.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"stats": grpcResp.Stats,
+		"success": true,
+		"stats":   grpcResp.Stats,
 	})
 }
 
@@ -151,6 +153,12 @@ func (h *AdminHandler) CreateCourse(w http.ResponseWriter, r *http.Request) {
 	grpcResp, err := h.AdminClient.CreateCourse(ctx, grpcReq)
 	if err != nil {
 		util.HandleGRPCError(w, err)
+		return
+	}
+
+	// FIX: Check business logic success
+	if !grpcResp.Success {
+		util.WriteJSONError(w, http.StatusBadRequest, grpcResp.Message)
 		return
 	}
 
@@ -202,6 +210,16 @@ func (h *AdminHandler) UpdateCourse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// FIX: Check business logic success
+	if !grpcResp.Success {
+		code := http.StatusBadRequest
+		if grpcResp.Message == "course not found" {
+			code = http.StatusNotFound
+		}
+		util.WriteJSONError(w, code, grpcResp.Message)
+		return
+	}
+
 	util.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": grpcResp.Success,
 		"course":  grpcResp.Course,
@@ -228,6 +246,16 @@ func (h *AdminHandler) DeleteCourse(w http.ResponseWriter, r *http.Request) {
 	grpcResp, err := h.AdminClient.DeleteCourse(ctx, grpcReq)
 	if err != nil {
 		util.HandleGRPCError(w, err)
+		return
+	}
+
+	// FIX: Check business logic success
+	if !grpcResp.Success {
+		code := http.StatusBadRequest
+		if grpcResp.Message == "course not found" {
+			code = http.StatusNotFound
+		}
+		util.WriteJSONError(w, code, grpcResp.Message)
 		return
 	}
 
@@ -262,6 +290,12 @@ func (h *AdminHandler) AssignFaculty(w http.ResponseWriter, r *http.Request) {
 	grpcResp, err := h.AdminClient.AssignFaculty(ctx, grpcReq)
 	if err != nil {
 		util.HandleGRPCError(w, err)
+		return
+	}
+
+	// FIX: Check business logic success
+	if !grpcResp.Success {
+		util.WriteJSONError(w, http.StatusBadRequest, grpcResp.Message)
 		return
 	}
 
@@ -301,6 +335,12 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	grpcResp, err := h.AdminClient.CreateUser(ctx, grpcReq)
 	if err != nil {
 		util.HandleGRPCError(w, err)
+		return
+	}
+
+	// FIX: Check business logic success
+	if !grpcResp.Success {
+		util.WriteJSONError(w, http.StatusBadRequest, grpcResp.Message)
 		return
 	}
 
@@ -371,6 +411,11 @@ func (h *AdminHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !grpcResp.Success {
+		util.WriteJSONError(w, http.StatusNotFound, grpcResp.Message)
+		return
+	}
+
 	util.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success":      grpcResp.Success,
 		"new_password": grpcResp.NewPassword,
@@ -403,6 +448,11 @@ func (h *AdminHandler) ToggleUserStatus(w http.ResponseWriter, r *http.Request) 
 	grpcResp, err := h.AdminClient.ToggleUserStatus(ctx, grpcReq)
 	if err != nil {
 		util.HandleGRPCError(w, err)
+		return
+	}
+
+	if !grpcResp.Success {
+		util.WriteJSONError(w, http.StatusBadRequest, grpcResp.Message)
 		return
 	}
 
@@ -479,9 +529,6 @@ func (h *AdminHandler) ToggleEnrollment(w http.ResponseWriter, r *http.Request) 
 }
 
 // OverrideEnrollment handles POST /admin/override/enroll and /admin/override/drop
-// The 'action' string ("force_enroll" or "force_drop") determines logic,
-// usually this handler is bound to both routes with a closure or check in routes,
-// OR we can make two separate methods. I'll make two methods for clarity matching routes.go style.
 func (h *AdminHandler) OverrideEnroll(w http.ResponseWriter, r *http.Request) {
 	h.handleOverride(w, r, "force_enroll")
 }
@@ -517,6 +564,11 @@ func (h *AdminHandler) handleOverride(w http.ResponseWriter, r *http.Request, ac
 	grpcResp, err := h.AdminClient.OverrideEnrollment(ctx, grpcReq)
 	if err != nil {
 		util.HandleGRPCError(w, err)
+		return
+	}
+
+	if !grpcResp.Success {
+		util.WriteJSONError(w, http.StatusBadRequest, grpcResp.Message)
 		return
 	}
 
@@ -581,6 +633,11 @@ func (h *AdminHandler) UpdateSystemConfig(w http.ResponseWriter, r *http.Request
 	grpcResp, err := h.AdminClient.UpdateSystemConfig(ctx, grpcReq)
 	if err != nil {
 		util.HandleGRPCError(w, err)
+		return
+	}
+
+	if !grpcResp.Success {
+		util.WriteJSONError(w, http.StatusBadRequest, grpcResp.Message)
 		return
 	}
 
