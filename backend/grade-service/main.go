@@ -17,6 +17,11 @@ import (
 )
 
 func main() {
+	// Load environment variables
+	if err := shared.LoadEnv(".env"); err != nil {
+		log.Println("Warning: .env file not found, using system environment variables")
+	}
+
 	// 1. Load Configuration using Shared Package
 	// Ensure your .env uses keys: SERVICE_PORT, MONGO_URI, MONGO_DB_NAME
 	cfg, err := shared.LoadServiceConfig(".env")

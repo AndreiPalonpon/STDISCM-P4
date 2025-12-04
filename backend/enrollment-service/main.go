@@ -1,82 +1,115 @@
+// ============================================================================
+// backend/enrollment-service/main.go
+// Entry point for the Enrollment Service
+// ============================================================================
+
 package main
 
 import (
-	"context"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 
-	// Proto imports
-	"stdiscm_p4/backend/pb/course"
-	"stdiscm_p4/backend/pb/enrollment"
-)
-
-const (
-	port              = ":50053"
-	mongoURI          = "mongodb://localhost:27017"
-	courseServiceAddr = "localhost:50052" // Address of Course Service
+	pb_course "stdiscm_p4/backend/pb/course"
+	pb "stdiscm_p4/backend/pb/enrollment"
+	"stdiscm_p4/backend/shared"
 )
 
 func main() {
-	log.Println("Starting Enrollment Service...")
+	// Load environment variables
+	if err := shared.LoadEnv(".env"); err != nil {
+		log.Println("Warning: .env file not found, using system environment variables")
+	}
 
-	// 1. Connect to MongoDB
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Load service configuration
+	config, err := shared.LoadServiceConfig("enrollment-service")
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
+	// Override with service-specific env vars
+	config.ServicePort = shared.GetEnv("ENROLLMENT_SERVICE_PORT", shared.DefaultEnrollmentServicePort)
+	config.MongoDB.URI = shared.GetEnv("ENROLLMENT_MONGO_URI", config.MongoDB.URI)
+
+	// Validate configuration
+	if err := shared.ValidateServiceConfig(config); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+
+	// Connect to MongoDB
+	mongoClient, db, err := shared.ConnectMongoDB(&config.MongoDB)
 	if err != nil {
 		log.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
-	defer client.Disconnect(context.Background())
+	defer func() {
+		if err := shared.DisconnectMongoDB(mongoClient); err != nil {
+			log.Printf("Error disconnecting from MongoDB: %v", err)
+		}
+	}()
 
-	// Ping DB
-	if err := client.Ping(ctx, nil); err != nil {
-		log.Fatalf("MongoDB not reachable: %v", err)
-	}
-	log.Println("Connected to MongoDB")
-
-	// 2. Connect to Course Service (Client)
-	// We need this to check prerequisites and course availability before enrolling
-	conn, err := grpc.Dial(courseServiceAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// ========================================================================
+	// Initialize Client Connection to Course Service
+	// Required for checking prerequisites and course details
+	// ========================================================================
+	courseServiceAddr := shared.GetEnv("COURSE_SERVICE_ADDR", "localhost:50052")
+	courseConn, err := grpc.NewClient(
+		courseServiceAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
 	if err != nil {
 		log.Fatalf("Failed to connect to Course Service: %v", err)
 	}
-	defer conn.Close()
-	courseClient := course.NewCourseServiceClient(conn)
+	defer courseConn.Close()
+	courseClient := pb_course.NewCourseServiceClient(courseConn)
 
-	// 3. Setup gRPC Server
-	lis, err := net.Listen("tcp", port)
+	// Create gRPC server
+	grpcServer := grpc.NewServer(
+		grpc.MaxRecvMsgSize(config.GRPC.MaxRecvMsgSize),
+		grpc.MaxSendMsgSize(config.GRPC.MaxSendMsgSize),
+	)
+
+	// Initialize and register Enrollment Service
+	// We pass mongoClient for transactions, db for collections, and courseClient for inter-service calls
+	enrollmentService := NewEnrollmentService(mongoClient, db, courseClient)
+	pb.RegisterEnrollmentServiceServer(grpcServer, enrollmentService)
+
+	// Register health check service
+	healthServer := health.NewServer()
+	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
+	healthServer.SetServingStatus("enrollment.EnrollmentService", grpc_health_v1.HealthCheckResponse_SERVING)
+
+	// Register reflection service
+	reflection.Register(grpcServer)
+
+	// Start listening
+	listener, err := net.Listen("tcp", ":"+config.ServicePort)
 	if err != nil {
-		log.Fatalf("Failed to listen: %v", err)
+		log.Fatalf("Failed to listen on port %s: %v", config.ServicePort, err)
 	}
 
-	grpcServer := grpc.NewServer()
-
-	// Initialize the service logic
-	enrollmentSvc := NewEnrollmentService(client, courseClient)
-	enrollment.RegisterEnrollmentServiceServer(grpcServer, enrollmentSvc)
-
-	// 4. Graceful Shutdown
+	// Graceful shutdown handling
 	go func() {
-		log.Printf("Enrollment Service listening on %s", port)
-		if err := grpcServer.Serve(lis); err != nil {
+		log.Printf("Enrollment Service is listening on port %s", config.ServicePort)
+		if err := grpcServer.Serve(listener); err != nil {
 			log.Fatalf("Failed to serve: %v", err)
 		}
 	}()
 
-	// Wait for kill signal
+	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
+
 	log.Println("Shutting down Enrollment Service...")
+	healthServer.SetServingStatus("enrollment.EnrollmentService", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
 	grpcServer.GracefulStop()
+	log.Println("Enrollment Service stopped")
 }

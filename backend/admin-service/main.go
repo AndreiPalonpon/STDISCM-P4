@@ -17,6 +17,11 @@ import (
 )
 
 func main() {
+	// Load environment variables
+	if err := shared.LoadEnv(".env"); err != nil {
+		log.Println("Warning: .env file not found, using system environment variables")
+	}
+
 	// 1. Load Configuration using Shared Package
 	cfg, err := shared.LoadServiceConfig("admin-service")
 	if err != nil {
