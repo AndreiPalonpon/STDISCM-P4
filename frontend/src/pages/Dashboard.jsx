@@ -5,7 +5,7 @@ import { useEnrollment } from '../hooks/useEnrollment';
 import { useGrades } from '../hooks/useGrades';
 import { useCourses } from '../hooks/useCourses';
 import Alert from '../components/common/Alert';
-import Loader from '../components/common/Loader';
+import Loader from '../components/common/Loader.jsx';
 import { 
   Home, 
   BookOpen, 
