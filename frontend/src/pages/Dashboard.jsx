@@ -1,11 +1,11 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth } from '../hooks/useAuth.js';
-import { useEnrollment } from '../hooks/useEnrollment.js';
-import { useGrades } from '../hooks/useGrades.js';
-import { useCourses } from '../hooks/useCourses.js';
+import { useAuth } from '../hooks/useAuth';
+import { useEnrollment } from '../hooks/useEnrollment';
+import { useGrades } from '../hooks/useGrades';
+import { useCourses } from '../hooks/useCourses';
 import Alert from '../components/common/Alert';
-import Loader from '../components/common/Loader';
+import Loader from '../components/common/Loader.jsx';
 import { 
   Home, 
   BookOpen, 

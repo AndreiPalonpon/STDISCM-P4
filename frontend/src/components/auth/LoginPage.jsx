@@ -3,6 +3,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import Alert from '../common/Alert';
 import Loader from '../common/Loader';
+import BackendHealthCheck from '../common/BackendHealthCheck';
 import { LogIn, GraduationCap } from 'lucide-react';
 
 const LoginPage = () => {
@@ -10,6 +11,7 @@ const LoginPage = () => {
   const [password, setPassword] = useState('');
   const [errors, setErrors] = useState({});
   const [isLoading, setIsLoading] = useState(false);
+  const [backendConnected, setBackendConnected] = useState(false);
   
   const { login, user, loading } = useAuth();
   const navigate = useNavigate();
@@ -44,14 +46,21 @@ const LoginPage = () => {
     if (!validateForm()) {
       return;
     }
+
+    if (!backendConnected) {
+      setErrors({ general: 'Cannot connect to backend server. Please check if the server is running.' });
+      return;
+    }
     
     setIsLoading(true);
+    setErrors({});
     
     try {
       await login(identifier, password);
       // Redirect is handled by useEffect
     } catch (error) {
-      setErrors({ general: error.message });
+      console.error('Login error:', error);
+      setErrors({ general: error.message || 'Login failed. Please try again.' });
     } finally {
       setIsLoading(false);
     }
@@ -76,6 +85,11 @@ const LoginPage = () => {
           <p className="text-gray-600">Sign in to access your account</p>
         </div>
 
+        {/* Backend Health Check */}
+        <div className="mb-6">
+          <BackendHealthCheck onStatusChange={setBackendConnected} />
+        </div>
+
         <div className="card shadow-lg">
           <div className="p-8">
             {errors.general && (
@@ -83,6 +97,7 @@ const LoginPage = () => {
                 type="error"
                 message={errors.general}
                 className="mb-6"
+                onClose={() => setErrors({})}
               />
             )}
             
@@ -102,8 +117,8 @@ const LoginPage = () => {
                     }
                   }}
                   className="input-field"
-                  placeholder="student@example.com or S12345"
-                  disabled={isLoading}
+                  placeholder="student@example.com"
+                  disabled={isLoading || !backendConnected}
                 />
                 {errors.identifier && (
                   <p className="mt-1 text-sm text-red-600">{errors.identifier}</p>
@@ -126,7 +141,7 @@ const LoginPage = () => {
                   }}
                   className="input-field"
                   placeholder="Enter your password"
-                  disabled={isLoading}
+                  disabled={isLoading || !backendConnected}
                 />
                 {errors.password && (
                   <p className="mt-1 text-sm text-red-600">{errors.password}</p>
@@ -135,7 +150,7 @@ const LoginPage = () => {
 
               <button
                 type="submit"
-                disabled={isLoading}
+                disabled={isLoading || !backendConnected}
                 className="w-full btn-primary flex items-center justify-center py-2.5"
               >
                 {isLoading ? (
@@ -151,14 +166,14 @@ const LoginPage = () => {
               <div className="text-center text-sm text-gray-500">
                 <p className="mb-2">Demo Credentials:</p>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
-                  <div className="text-left">
+                  <div className="text-left bg-gray-50 p-2 rounded">
                     <p className="font-medium">Student:</p>
-                    <p>Email: student@example.com</p>
+                    <p>Email: student@test.com</p>
                     <p>Password: password123</p>
                   </div>
-                  <div className="text-left">
+                  <div className="text-left bg-gray-50 p-2 rounded">
                     <p className="font-medium">Faculty:</p>
-                    <p>Email: faculty@example.com</p>
+                    <p>Email: faculty@test.com</p>
                     <p>Password: password123</p>
                   </div>
                 </div>
