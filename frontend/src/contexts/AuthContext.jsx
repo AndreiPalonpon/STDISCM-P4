@@ -1,11 +1,10 @@
-// ============================================================================
-// File: src/contexts/AuthContext.jsx
-// ============================================================================
+// src/contexts/AuthContext.jsx
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { authService } from '../services/authService';
 import { STORAGE_KEYS } from '../config';
 
-const AuthContext = createContext(null);
+// Create and export AuthContext
+export const AuthContext = createContext(null);
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
