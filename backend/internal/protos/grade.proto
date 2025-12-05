@@ -1,0 +1,150 @@
+syntax = "proto3";
+
+package grade;
+option go_package = "backend/internal/pb/grade";
+
+import "google/protobuf/timestamp.proto";
+
+// Service definition
+service GradeService {
+  rpc GetStudentGrades(GetStudentGradesRequest) returns (GetStudentGradesResponse);
+  rpc CalculateGPA(CalculateGPARequest) returns (CalculateGPAResponse);
+  rpc GetClassRoster(GetClassRosterRequest) returns (GetClassRosterResponse);
+  
+  // Client streaming: Gateway streams grade entries to service
+  rpc UploadGrades(stream UploadGradeEntryRequest) returns (UploadGradesResponse);
+  
+  rpc PublishGrades(PublishGradesRequest) returns (PublishGradesResponse);
+  rpc GetCourseGrades(GetCourseGradesRequest) returns (GetCourseGradesResponse);
+}
+
+// Common messages
+message Grade {
+  string enrollment_id = 1;
+  string student_id = 2; // denormalized
+  string student_name = 3; // denormalized
+  string course_id = 4; // denormalized
+  string course_code = 5; // denormalized
+  string course_title = 6; // denormalized
+  int32 units = 7; // denormalized
+  string grade = 8; // A, B, C, D, F, I, W
+  string semester = 9; // denormalized
+  string uploaded_by = 10;
+  google.protobuf.Timestamp uploaded_at = 11;
+  bool published = 12;
+  google.protobuf.Timestamp published_at = 13;
+  string override_reason = 14;
+}
+
+message GPACalculation {
+  double term_gpa = 1;
+  double cgpa = 2;
+  int32 total_units_attempted = 3;
+  int32 total_units_earned = 4;
+  repeated SemesterGPA semester_breakdown = 5;
+}
+
+message SemesterGPA {
+  string semester = 1;
+  double gpa = 2;
+  int32 units = 3;
+  int32 courses_count = 4;
+}
+
+message StudentRosterEntry {
+  string student_id = 1;
+  string student_name = 2;
+  string email = 3;
+  string major = 4;
+  int32 year_level = 5;
+  string grade = 6; // current grade if uploaded
+}
+
+message GradeEntry {
+  string student_id = 1;
+  string grade = 2;
+}
+
+// Request/Response messages
+message GetStudentGradesRequest {
+  string student_id = 1;
+  string semester = 2; // optional filter
+}
+
+message GetStudentGradesResponse {
+  repeated Grade grades = 1;
+  GPACalculation gpa_info = 2;
+}
+
+message CalculateGPARequest {
+  string student_id = 1;
+  string semester = 2; // optional, if empty calculates CGPA
+}
+
+message CalculateGPAResponse {
+  bool success = 1;
+  GPACalculation gpa_info = 2;
+  string message = 3;
+}
+
+message GetClassRosterRequest {
+  string course_id = 1;
+}
+
+message GetClassRosterResponse {
+  string course_id = 1;
+  string course_code = 2;
+  string course_title = 3;
+  repeated StudentRosterEntry students = 4;
+  int32 total_students = 5;
+}
+
+message UploadGradesRequest {
+  string course_id = 1;
+  string faculty_id = 2;
+}
+
+// Server streaming: Gateway sends grade entries one by one
+message UploadGradeEntryRequest {
+  oneof payload {
+    UploadMetadata metadata = 1;  // First message only
+    GradeEntry entry = 2;         // Subsequent messages
+  }
+  bool is_last = 3;
+}
+
+message UploadMetadata {
+  string course_id = 1;
+  string faculty_id = 2;
+}
+
+message UploadGradesResponse {
+  bool success = 1;
+  int32 total_processed = 2;
+  int32 successful = 3;
+  int32 failed = 4;
+  repeated string errors = 5;
+  string message = 6;
+}
+
+message PublishGradesRequest {
+  string course_id = 1;
+  string faculty_id = 2;
+}
+
+message PublishGradesResponse {
+  bool success = 1;
+  int32 grades_published = 2;
+  string message = 3;
+}
+
+message GetCourseGradesRequest {
+  string course_id = 1;
+  string faculty_id = 2; // for authorization
+}
+
+message GetCourseGradesResponse {
+  repeated Grade grades = 1;
+  int32 total_grades = 2;
+  bool all_published = 3;
+}
