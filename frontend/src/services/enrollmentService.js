@@ -1,49 +1,59 @@
-import api from './api';
+import api from "./api";
 
 export const enrollmentService = {
   getCart: async (studentId) => {
-    return api.get(`/enrollment/cart/${studentId}`);
+    // Fixed: Path is /cart, studentId comes from token
+    return api.get("/cart");
   },
 
   addToCart: async (studentId, courseId) => {
-    return api.post('/enrollment/cart/add', { student_id: studentId, course_id: courseId });
+    // Fixed: Path is /cart/add, removed studentId from body
+    return api.post("/cart/add", { course_id: courseId });
   },
 
   removeFromCart: async (studentId, courseId) => {
-    return api.post('/enrollment/cart/remove', { student_id: studentId, course_id: courseId });
+    // Fixed: Use DELETE and path parameter
+    return api.delete(`/cart/remove/${courseId}`);
   },
 
   clearCart: async (studentId) => {
-    return api.post('/enrollment/cart/clear', { student_id: studentId });
+    // Fixed: Use DELETE
+    return api.delete("/cart/clear");
   },
 
   enroll: async (studentId) => {
-    return api.post('/enrollment/enroll', { student_id: studentId });
+    // Fixed: Path is /enrollment/enroll-all
+    return api.post("/enrollment/enroll-all", {});
   },
 
   drop: async (studentId, courseId) => {
-    return api.post('/enrollment/drop', { student_id: studentId, course_id: courseId });
+    // Fixed: Removed student_id from body
+    return api.post("/enrollment/drop", { course_id: courseId });
   },
 
   getEnrollments: async (studentId, filters = {}) => {
-    const params = new URLSearchParams({ student_id: studentId });
-    if (filters.semester) params.append('semester', filters.semester);
-    if (filters.status) params.append('status', filters.status);
-    
-    return api.get(`/enrollment/student?${params}`);
+    // Fixed: Path is /enrollment/schedule, removed student_id param
+    const params = new URLSearchParams();
+    if (filters.semester) params.append("semester", filters.semester);
+    if (filters.status) params.append("status", filters.status);
+
+    return api.get(`/enrollment/schedule?${params}`);
   },
 
   // Admin/Faculty methods
   overrideEnrollment: async (studentId, courseId, action, adminId) => {
-    return api.post('/enrollment/override', {
-      student_id: studentId,
-      course_id: courseId,
-      action: action,
-      admin_id: adminId,
-    });
+    // This connects to Admin service, path is correct based on Admin Handler
+    return api.post(
+      "/admin/override/" + (action === "force_enroll" ? "enroll" : "drop"),
+      {
+        student_id: studentId,
+        course_id: courseId,
+        reason: "Administrative Override",
+        // admin_id is extracted from token in backend
+      }
+    );
   },
 
-  getClassEnrollments: async (courseId) => {
-    return api.get(`/enrollment/course/${courseId}`);
-  },
+  // Note: There is no getClassEnrollments endpoint in the backend currently
+  // You likely want gradeService.getClassRoster instead
 };

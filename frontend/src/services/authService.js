@@ -1,37 +1,39 @@
-import api from './api';
+import api from "./api";
 
 export const authService = {
   login: async (identifier, password) => {
-    const response = await api.post('/auth/login', { identifier, password });
-    
+    const response = await api.post("/auth/login", { identifier, password });
+
     if (!response.success) {
-      throw new Error(response.message || 'Login failed');
+      throw new Error(response.message || "Login failed");
     }
-    
+
     return response;
   },
 
   logout: async (token) => {
-    const response = await api.post('/auth/logout', { token });
+    // Backend handles logout via Authorization header, but we send post to trigger handler
+    const response = await api.post("/auth/logout", {});
     return response;
   },
 
   validateToken: async (token) => {
-    const response = await api.post('/auth/validate', { token });
+    // Fixed: Backend expects GET request for validation
+    const response = await api.get("/auth/validate");
     return response;
   },
 
   changePassword: async (userId, oldPassword, newPassword) => {
-    const response = await api.post('/auth/change-password', {
-      user_id: userId,
+    // Fixed: Removed user_id from body, backend gets it from token
+    const response = await api.post("/auth/change-password", {
       old_password: oldPassword,
       new_password: newPassword,
     });
-    
+
     if (!response.success) {
-      throw new Error(response.message || 'Password change failed');
+      throw new Error(response.message || "Password change failed");
     }
-    
+
     return response;
   },
 };

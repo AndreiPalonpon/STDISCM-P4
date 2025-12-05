@@ -1,14 +1,16 @@
-import api from './api';
+import api from "./api";
 
 export const gradeService = {
-  getStudentGrades: async (studentId, semester = '') => {
-    const params = semester ? `?semester=${semester}` : '';
-    return api.get(`/grades/student/${studentId}${params}`);
+  getStudentGrades: async (studentId, semester = "") => {
+    // Fixed: Path is /grades, studentId from token
+    const params = semester ? `?semester=${semester}` : "";
+    return api.get(`/grades${params}`);
   },
 
-  calculateGPA: async (studentId, semester = '') => {
-    const params = semester ? `?semester=${semester}` : '';
-    return api.get(`/grades/gpa/${studentId}${params}`);
+  calculateGPA: async (studentId, semester = "") => {
+    // Fixed: Path is /grades/gpa, studentId from token
+    const params = semester ? `?semester=${semester}` : "";
+    return api.get(`/grades/gpa${params}`);
   },
 
   getClassRoster: async (courseId) => {
@@ -16,22 +18,20 @@ export const gradeService = {
   },
 
   uploadGrades: async (courseId, facultyId, grades) => {
-    return api.post('/grades/upload', {
-      course_id: courseId,
-      faculty_id: facultyId,
-      grades: grades,
+    // Fixed: Path includes courseId, payload structure matches 'entries'
+    // Input 'grades' is expected to be array of { student_id, grade }
+    return api.post(`/grades/upload/${courseId}`, {
+      entries: grades,
     });
   },
 
   publishGrades: async (courseId, facultyId) => {
-    return api.post('/grades/publish', {
-      course_id: courseId,
-      faculty_id: facultyId,
-    });
+    // Fixed: Path includes courseId, no body needed
+    return api.post(`/grades/publish/${courseId}`, {});
   },
 
   getCourseGrades: async (courseId, facultyId) => {
-    const params = facultyId ? `?faculty_id=${facultyId}` : '';
-    return api.get(`/grades/course/${courseId}${params}`);
+    // Fixed: Removed manual faculty_id param
+    return api.get(`/grades/course/${courseId}`);
   },
 };
