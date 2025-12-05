@@ -1,0 +1,149 @@
+syntax = "proto3";
+
+package enrollment;
+option go_package = "backend/internal/pb/enrollment";
+
+import "google/protobuf/timestamp.proto";
+
+// Service definition
+service EnrollmentService {
+  rpc AddToCart(AddToCartRequest) returns (AddToCartResponse);
+  rpc RemoveFromCart(RemoveFromCartRequest) returns (RemoveFromCartResponse);
+  rpc GetCart(GetCartRequest) returns (GetCartResponse);
+  rpc ClearCart(ClearCartRequest) returns (ClearCartResponse);
+  rpc CheckConflicts(CheckConflictsRequest) returns (CheckConflictsResponse);
+  rpc EnrollAll(EnrollAllRequest) returns (EnrollAllResponse);
+  rpc DropCourse(DropCourseRequest) returns (DropCourseResponse);
+  rpc GetStudentEnrollments(GetStudentEnrollmentsRequest) returns (GetStudentEnrollmentsResponse);
+}
+
+// Common messages
+message ScheduleInfo {
+  repeated string days = 1; // ["M", "W", "F"]
+  string start_time = 2; // "9:00"
+  string end_time = 3; // "10:00"
+}
+
+message Enrollment {
+  string id = 1;
+  string student_id = 2;
+  string course_id = 3;
+  string course_code = 4; // denormalized
+  string course_title = 5; // denormalized
+  int32 units = 6; // denormalized
+  string status = 7; // enrolled, dropped, completed
+  google.protobuf.Timestamp enrolled_at = 8;
+  google.protobuf.Timestamp dropped_at = 9;
+  ScheduleInfo schedule_info = 10;
+}
+
+message CartItem {
+  string course_id = 1;
+  string course_code = 2;
+  string course_title = 3;
+  int32 units = 4;
+  ScheduleInfo schedule_info = 5;
+}
+
+message Cart {
+  string student_id = 1;
+  repeated CartItem items = 2;
+  int32 total_units = 3;
+  bool has_conflicts = 4;
+  repeated string missing_prerequisites = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message Conflict {
+  string course1_id = 1;
+  string course1_code = 2;
+  string course2_id = 3;
+  string course2_code = 4;
+  string conflict_type = 5; // "schedule", "duplicate"
+  string details = 6;
+}
+
+// Request/Response messages
+message AddToCartRequest {
+  string student_id = 1;
+  string course_id = 2;
+}
+
+message AddToCartResponse {
+  bool success = 1;
+  string message = 2;
+  Cart cart = 3;
+}
+
+message RemoveFromCartRequest {
+  string student_id = 1;
+  string course_id = 2;
+}
+
+message RemoveFromCartResponse {
+  bool success = 1;
+  string message = 2;
+  Cart cart = 3;
+}
+
+message GetCartRequest {
+  string student_id = 1;
+}
+
+message GetCartResponse {
+  bool success = 1;
+  Cart cart = 2;
+  string message = 3;
+}
+
+message ClearCartRequest {
+  string student_id = 1;
+}
+
+message ClearCartResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message CheckConflictsRequest {
+  string student_id = 1;
+  repeated string course_ids = 2;
+}
+
+message CheckConflictsResponse {
+  bool has_conflicts = 1;
+  repeated Conflict conflicts = 2;
+  string message = 3;
+}
+
+message EnrollAllRequest {
+  string student_id = 1;
+}
+
+message EnrollAllResponse {
+  bool success = 1;
+  string message = 2;
+  repeated Enrollment enrollments = 3;
+  repeated string failed_courses = 4; // courses that failed to enroll
+}
+
+message DropCourseRequest {
+  string student_id = 1;
+  string course_id = 2;
+}
+
+message DropCourseResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message GetStudentEnrollmentsRequest {
+  string student_id = 1;
+  string semester = 2; // optional filter
+  string status = 3; // optional filter: enrolled, dropped, completed
+}
+
+message GetStudentEnrollmentsResponse {
+  repeated Enrollment enrollments = 1;
+  int32 total_units = 2;
+}
