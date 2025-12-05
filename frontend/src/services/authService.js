@@ -12,19 +12,19 @@ export const authService = {
   },
 
   logout: async (token) => {
-    // Backend handles logout via Authorization header, but we send post to trigger handler
+    // FIX: Logout uses Authorization header, body is typically empty or optional
     const response = await api.post("/auth/logout", {});
     return response;
   },
 
   validateToken: async (token) => {
-    // Fixed: Backend expects GET request for validation
+    // FIX: Backend expects GET request for validation, token is in Header
     const response = await api.get("/auth/validate");
     return response;
   },
 
   changePassword: async (userId, oldPassword, newPassword) => {
-    // Fixed: Removed user_id from body, backend gets it from token
+    // FIX: Removed user_id from body, backend gets it from token
     const response = await api.post("/auth/change-password", {
       old_password: oldPassword,
       new_password: newPassword,

@@ -7,6 +7,7 @@ export const courseService = {
     if (filters.search) params.append("search", filters.search);
     if (filters.open_only) params.append("open_only", "true");
     if (filters.semester) params.append("semester", filters.semester);
+    if (filters.faculty_id) params.append("faculty_id", filters.faculty_id);
 
     const query = params.toString() ? `?${params}` : "";
     return api.get(`/courses${query}`);
@@ -26,7 +27,7 @@ export const courseService = {
     );
   },
 
-  // Faculty/Admin methods - Fixed paths to point to /admin/courses
+  // FIX: Admin methods now point to the correct /admin routes
   create: async (courseData) => {
     return api.post("/admin/courses", courseData);
   },

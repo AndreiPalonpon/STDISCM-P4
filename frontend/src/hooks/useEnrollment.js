@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
-import { enrollmentService } from '../services/enrollmentService';
-import { useAuth } from './useAuth';
+import { useState, useEffect, useCallback } from "react";
+import { enrollmentService } from "../services/enrollmentService";
+import { useAuth } from "./useAuth";
 
 export const useEnrollment = () => {
   const { user } = useAuth();
@@ -9,20 +9,27 @@ export const useEnrollment = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // FIX: Memoize loadCart using useCallback
   const loadCart = useCallback(async () => {
     if (!user?.id) return;
-    
+
     try {
       const data = await enrollmentService.getCart(user.id);
       setCart(data.cart);
     } catch (err) {
-      setError(err.message);
+      // Handle "cart not found" or empty cart gracefully
+      if (err.message.includes("not found") || err.message.includes("empty")) {
+        setCart({ courseIds: [], total_units: 0 }); // Set to an empty but valid cart object
+      } else {
+        setError(err.message);
+      }
     }
   }, [user?.id]);
 
+  // FIX: Memoize loadEnrollments using useCallback
   const loadEnrollments = useCallback(async () => {
     if (!user?.id) return;
-    
+
     try {
       setLoading(true);
       const data = await enrollmentService.getEnrollments(user.id);
@@ -34,39 +41,45 @@ export const useEnrollment = () => {
     }
   }, [user?.id]);
 
-  const addToCart = useCallback(async (courseId) => {
-    if (!user?.id) return;
-    
-    try {
-      await enrollmentService.addToCart(user.id, courseId);
-      await loadCart();
-      return true;
-    } catch (err) {
-      setError(err.message);
-      throw err;
-    }
-  }, [user?.id, loadCart]);
+  const addToCart = useCallback(
+    async (courseId) => {
+      if (!user?.id) return;
+      try {
+        const response = await enrollmentService.addToCart(user.id, courseId);
+        setCart(response.cart);
+        return true;
+      } catch (err) {
+        setError(err.message);
+        throw err;
+      }
+    },
+    [user?.id]
+  );
 
-  const removeFromCart = useCallback(async (courseId) => {
-    if (!user?.id) return;
-    
-    try {
-      await enrollmentService.removeFromCart(user.id, courseId);
-      await loadCart();
-      return true;
-    } catch (err) {
-      setError(err.message);
-      throw err;
-    }
-  }, [user?.id, loadCart]);
+  const removeFromCart = useCallback(
+    async (courseId) => {
+      if (!user?.id) return;
+      try {
+        const response = await enrollmentService.removeFromCart(
+          user.id,
+          courseId
+        );
+        setCart(response.cart);
+        return true;
+      } catch (err) {
+        setError(err.message);
+        throw err;
+      }
+    },
+    [user?.id]
+  );
 
   const enroll = useCallback(async () => {
     if (!user?.id) return;
-    
     try {
       const response = await enrollmentService.enroll(user.id);
-      await loadCart();
-      await loadEnrollments();
+      loadCart();
+      loadEnrollments();
       return response;
     } catch (err) {
       setError(err.message);
@@ -74,19 +87,22 @@ export const useEnrollment = () => {
     }
   }, [user?.id, loadCart, loadEnrollments]);
 
-  const dropCourse = useCallback(async (courseId) => {
-    if (!user?.id) return;
-    
-    try {
-      await enrollmentService.drop(user.id, courseId);
-      await loadEnrollments();
-      return true;
-    } catch (err) {
-      setError(err.message);
-      throw err;
-    }
-  }, [user?.id, loadEnrollments]);
+  const dropCourse = useCallback(
+    async (courseId) => {
+      if (!user?.id) return;
+      try {
+        await enrollmentService.drop(user.id, courseId);
+        loadEnrollments();
+        return true;
+      } catch (err) {
+        setError(err.message);
+        throw err;
+      }
+    },
+    [user?.id, loadEnrollments]
+  );
 
+  // FIX: Main useEffect runs with stable dependencies
   useEffect(() => {
     if (user?.id) {
       loadCart();

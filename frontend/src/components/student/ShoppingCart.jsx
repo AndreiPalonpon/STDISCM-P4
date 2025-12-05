@@ -1,10 +1,11 @@
+// frontend/src/components/student/ShoppingCart.jsx
 import React, { useState } from 'react';
 import { useEnrollment } from '../../hooks/useEnrollment';
 import { useCourses } from '../../hooks/useCourses';
 import Alert from '../common/Alert';
 import Loader from '../common/Loader';
 import CourseCard from '../common/CourseCard';
-import { CheckCircle, Trash2, AlertTriangle } from 'lucide-react';
+import { CheckCircle, Trash2, AlertTriangle, ShoppingCart as CartIcon } from 'lucide-react';
 
 const ShoppingCart = () => {
   const { cart, enroll, removeFromCart, loading, error } = useEnrollment();
@@ -66,7 +67,7 @@ const ShoppingCart = () => {
 
       {cartCourses.length === 0 ? (
         <div className="card text-center py-12">
-          <ShoppingCart className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+          <CartIcon className="h-12 w-12 text-gray-300 mx-auto mb-4" />
           <h3 className="text-lg font-medium text-gray-900 mb-2">Your cart is empty</h3>
           <p className="text-gray-600">Add courses from the course catalog to get started.</p>
           <button

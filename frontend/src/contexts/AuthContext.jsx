@@ -1,11 +1,12 @@
-// src/contexts/AuthContext.jsx
+// frontend/src/contexts/AuthContext.jsx
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { authService } from '../services/authService';
 import { STORAGE_KEYS } from '../config';
 
-// Create and export AuthContext
+// Create and export AuthContext - EXPLICIT EXPORT ADDED
 export const AuthContext = createContext(null);
 
+// Export useAuth hook - KEPT IN SAME FILE TO PREVENT CIRCULAR DEPENDENCIES
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
@@ -28,6 +29,7 @@ export const AuthProvider = ({ children }) => {
       try {
         setUser(JSON.parse(userData));
       } catch (err) {
+        console.error('Failed to parse user data:', err);
         localStorage.removeItem(STORAGE_KEYS.TOKEN);
         localStorage.removeItem(STORAGE_KEYS.USER);
       }

@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import Alert from '../common/Alert';
 import Loader from '../common/Loader';
 import BackendHealthCheck from '../common/BackendHealthCheck';
-import { LogIn, GraduationCap } from 'lucide-react';
+import { LogIn, GraduationCap, ServerCrash, WifiOff } from 'lucide-react';
 
 const LoginPage = () => {
   const [identifier, setIdentifier] = useState('');
@@ -27,15 +27,8 @@ const LoginPage = () => {
 
   const validateForm = () => {
     const newErrors = {};
-    
-    if (!identifier.trim()) {
-      newErrors.identifier = 'Email or ID is required';
-    }
-    
-    if (!password) {
-      newErrors.password = 'Password is required';
-    }
-    
+    if (!identifier.trim()) newErrors.identifier = 'Email or ID is required';
+    if (!password) newErrors.password = 'Password is required';
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -43,9 +36,7 @@ const LoginPage = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (!validateForm()) {
-      return;
-    }
+    if (!validateForm()) return;
 
     if (!backendConnected) {
       setErrors({ general: 'Cannot connect to backend server. Please check if the server is running.' });
@@ -57,10 +48,39 @@ const LoginPage = () => {
     
     try {
       await login(identifier, password);
-      // Redirect is handled by useEffect
     } catch (error) {
       console.error('Login error:', error);
-      setErrors({ general: error.message || 'Login failed. Please try again.' });
+      
+      let errorMessage = error.message || 'Login failed. Please try again.';
+      let errorContent = errorMessage;
+
+      // FIX: Enhanced Error Parsing
+      if (errorMessage.toLowerCase().includes('service unavailable')) {
+        errorContent = (
+          <div className="flex flex-col">
+            <span className="font-bold flex items-center gap-2">
+              <ServerCrash size={16} /> Auth Service Unavailable
+            </span>
+            <span className="text-sm mt-1">
+              The Gateway is working, but the <strong>Auth Microservice</strong> is not responding.
+            </span>
+            <span className="text-xs mt-1 opacity-75">
+              Ensure the **Auth Service** node (port 50051) is running.
+            </span>
+          </div>
+        );
+      } else if (errorMessage.toLowerCase().includes('unable to connect') || errorMessage.toLowerCase().includes('fetch')) {
+         errorContent = (
+          <div className="flex flex-col">
+             <span className="font-bold flex items-center gap-2">
+              <WifiOff size={16} /> Connection Lost
+            </span>
+            <span className="text-sm mt-1">Unable to communicate with the server.</span>
+          </div>
+         );
+      }
+
+      setErrors({ general: errorContent });
     } finally {
       setIsLoading(false);
     }
@@ -112,9 +132,7 @@ const LoginPage = () => {
                   value={identifier}
                   onChange={(e) => {
                     setIdentifier(e.target.value);
-                    if (errors.identifier) {
-                      setErrors(prev => ({ ...prev, identifier: '' }));
-                    }
+                    if (errors.identifier) setErrors(prev => ({ ...prev, identifier: '' }));
                   }}
                   className="input-field"
                   placeholder="student@example.com"
@@ -135,9 +153,7 @@ const LoginPage = () => {
                   value={password}
                   onChange={(e) => {
                     setPassword(e.target.value);
-                    if (errors.password) {
-                      setErrors(prev => ({ ...prev, password: '' }));
-                    }
+                    if (errors.password) setErrors(prev => ({ ...prev, password: '' }));
                   }}
                   className="input-field"
                   placeholder="Enter your password"
@@ -165,16 +181,21 @@ const LoginPage = () => {
             <div className="mt-6 pt-6 border-t">
               <div className="text-center text-sm text-gray-500">
                 <p className="mb-2">Demo Credentials:</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
-                  <div className="text-left bg-gray-50 p-2 rounded">
-                    <p className="font-medium">Student:</p>
-                    <p>Email: student@test.com</p>
-                    <p>Password: password123</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+                  <div className="text-left bg-gray-50 p-2 rounded border border-gray-200">
+                    <p className="font-bold text-gray-700">Admin:</p>
+                    <p>admin@example.com</p>
+                    <p>password</p>
                   </div>
-                  <div className="text-left bg-gray-50 p-2 rounded">
-                    <p className="font-medium">Faculty:</p>
-                    <p>Email: faculty@test.com</p>
-                    <p>Password: password123</p>
+                  <div className="text-left bg-gray-50 p-2 rounded border border-gray-200">
+                    <p className="font-bold text-gray-700">Student:</p>
+                    <p>student@example.com</p>
+                    <p>password</p>
+                  </div>
+                  <div className="text-left bg-gray-50 p-2 rounded border border-gray-200">
+                    <p className="font-bold text-gray-700">Faculty:</p>
+                    <p>faculty@example.com</p>
+                    <p>password</p>
                   </div>
                 </div>
               </div>

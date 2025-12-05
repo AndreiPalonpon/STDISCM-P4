@@ -1,4 +1,5 @@
 import { API_CONFIG } from "../config";
+import { STORAGE_KEYS } from "../config";
 
 class ApiService {
   constructor() {
@@ -7,7 +8,7 @@ class ApiService {
   }
 
   async request(endpoint, options = {}) {
-    const token = localStorage.getItem("auth_token");
+    const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
     const headers = {
       ...API_CONFIG.headers,
       ...(token && { Authorization: `Bearer ${token}` }),
@@ -36,33 +37,28 @@ class ApiService {
         data = await response.json();
       } else {
         const text = await response.text();
-        // If it's not JSON, it might be an empty 200 OK or a server error html
         if (!response.ok) {
           throw new Error(text || "Server error");
         }
         data = { success: true, message: text };
       }
 
-      // --- FIX STARTS HERE ---
-      // Handle 401 Unauthorized
+      // FIX: Differentiate 401 during login vs. session expiration
       if (response.status === 401) {
         // If we are currently trying to login, a 401 means "Wrong Password/User",
-        // NOT "Session Expired". We should throw the actual error message.
         if (endpoint.includes("/auth/login")) {
           throw new Error(data.message || "Invalid credentials");
         }
 
         // For all other endpoints, 401 means the token is bad/expired.
-        localStorage.removeItem("auth_token");
-        localStorage.removeItem("user_data");
+        localStorage.removeItem(STORAGE_KEYS.TOKEN);
+        localStorage.removeItem(STORAGE_KEYS.USER);
 
-        // Only redirect if we aren't already on the login page
         if (!window.location.pathname.includes("/login")) {
           window.location.href = "/login";
         }
         throw new Error("Session expired. Please login again.");
       }
-      // --- FIX ENDS HERE ---
 
       // Handle other error responses
       if (!response.ok) {
@@ -93,7 +89,7 @@ class ApiService {
         );
       }
 
-      if (error.message === "Failed to fetch") {
+      if (error.message.includes("Failed to fetch")) {
         throw new Error(
           "Unable to connect to the server. Please check:\n1. Backend server is running on port 8080\n2. Network connection is stable"
         );
